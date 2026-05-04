@@ -1,70 +1,78 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh">
 <head>
-  <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
-  <title>济阳蔡氏公会 Youth Programme</title>
-  <?!= include('Styles'); ?>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>济阳蔡氏公会 · Youth Programme</title>
+<?!= include('Styles'); ?>
 </head>
 <body>
-
-<!-- ── LOGIN ─────────────────────────────────────────────── -->
-<div id="loginPage" class="page active">
-  <div class="login-wrap">
-    <div class="login-crest">❤️</div>
-    <div class="login-title">新加坡济阳蔡氏公会</div>
-    <div class="login-sub">YOUTH PROGRAMME</div>
-
-    <div class="role-tabs">
-      <button class="role-tab active" data-role="admin"    onclick="setRole('admin')">Admin</button>
-      <button class="role-tab"        data-role="director" onclick="setRole('director')">Director</button>
-      <button class="role-tab"        data-role="youth"    onclick="setRole('youth')">Youth</button>
-    </div>
-
-    <div class="field-group">
-      <label class="field-label">Username</label>
-      <input id="loginUser" class="field-input" type="text" placeholder="Enter username" autocomplete="username"/>
-    </div>
-    <div class="field-group">
-      <label class="field-label">Password</label>
-      <input id="loginPass" class="field-input" type="password" placeholder="••••••" autocomplete="current-password"/>
-    </div>
-    <div id="loginError" class="error-msg" style="display:none"></div>
-    <button class="btn-primary" onclick="doLogin()">Sign In</button>
-
-    <div class="demo-hint">
-      <div class="demo-hint-title">Demo Credentials</div>
-      <div><span class="demo-role admin-col">Admin:</span> admin / admin123</div>
-      <div><span class="demo-role dir-col">Director:</span> dir1–dir4 / dir1234</div>
-    </div>
-  </div>
-</div>
-
-<!-- ── ADMIN VIEW ────────────────────────────────────────── -->
-<div id="adminPage" class="page">
-  <div class="topbar topbar-admin">
-    <div class="topbar-inner">
-      <div class="topbar-crest">❤️</div>
-      <div class="topbar-info">
-        <div class="topbar-title">新加坡济阳蔡氏公会</div>
-        <div class="topbar-sub">Admin · <span id="adminName"></span></div>
+<div id="app">
+  <!-- LOGIN -->
+  <div id="loginScreen" class="screen active">
+    <div class="login-wrap">
+      <div class="crest">❤️</div>
+      <div class="login-title">新加坡济阳蔡氏公会</div>
+      <div class="login-sub">YOUTH PROGRAMME</div>
+      <div class="login-card">
+        <div class="role-tabs" id="roleTabs">
+          <button class="role-btn active" onclick="setRole('admin',this)">Admin</button>
+          <button class="role-btn" onclick="setRole('director',this)">Director</button>
+          <button class="role-btn" onclick="setRole('youth',this)">Youth</button>
+        </div>
+        <div class="field">
+          <label>Name <span style="opacity:.5">(or leave blank)</span></label>
+          <input id="loginName" type="text" placeholder="Your name" onkeydown="if(event.key==='Enter')document.getElementById('loginPass').focus()">
+        </div>
+        <div class="field">
+          <label>Password</label>
+          <input id="loginPass" type="password" placeholder="••••••" onkeydown="if(event.key==='Enter')doLogin()">
+        </div>
+        <div id="loginError" class="error-msg" style="display:none"></div>
+        <button class="primary-btn" onclick="doLogin()" id="loginBtn">Sign In</button>
+        <div class="demo-hint">
+          <div class="demo-hint-title">Demo passwords</div>
+          <div>Admin: <strong>admin123</strong></div>
+          <div>Director: <strong>dir1pass</strong> – <strong>dir4pass</strong></div>
+          <div>Youth: <strong>y1pass</strong> – <strong>y3pass</strong></div>
+        </div>
       </div>
-      <div id="adminPendingBadge" class="pending-badge" style="display:none"></div>
-      <button class="btn-signout" onclick="doLogout()">Sign out</button>
     </div>
   </div>
 
-  <div class="stat-bar">
-    <div class="stat-bar-inner">
+  <!-- MAIN APP -->
+  <div id="mainApp" class="screen" style="display:none">
+    <!-- Header -->
+    <div class="header" id="appHeader">
+      <div class="header-inner">
+        <div class="header-crest">❤️</div>
+        <div class="header-text">
+          <div class="header-title">新加坡济阳蔡氏公会</div>
+          <div class="header-sub" id="headerSub">Youth Programme</div>
+        </div>
+        <div id="pendingBadge" class="pending-badge" style="display:none">0 pending</div>
+        <div id="headerScore" style="display:none" class="header-score">
+          <div class="header-score-num" id="headerScoreNum">0</div>
+          <div class="header-score-lbl">pts</div>
+        </div>
+        <button class="signout-btn" onclick="doLogout()">Out</button>
+      </div>
+    </div>
+
+    <!-- Tab bar -->
+    <div class="tab-bar" id="tabBar"></div>
+
+    <!-- Global stat pills -->
+    <div class="stat-strip" id="statStrip">
       <div class="stat-pill">
         <div class="stat-icon">👥</div>
-        <div class="stat-val" id="statApprovedYouth">0</div>
-        <div class="stat-lbl">Youth</div>
+        <div class="stat-val" id="statYouth">0</div>
+        <div class="stat-lbl">Active Youth</div>
       </div>
       <div class="stat-pill">
         <div class="stat-icon">📅</div>
-        <div class="stat-val" id="statApprovedEvents">0</div>
-        <div class="stat-lbl">Events</div>
+        <div class="stat-val" id="statEvents">0</div>
+        <div class="stat-lbl">Events Done</div>
       </div>
       <div class="stat-pill">
         <div class="stat-icon">⏳</div>
@@ -72,172 +80,21 @@
         <div class="stat-lbl">Pending</div>
       </div>
     </div>
-  </div>
 
-  <div class="tab-bar">
-    <div class="tab-bar-inner">
-      <button class="tab active" data-view="adminLeaderboard" onclick="adminTab(this,'adminLeaderboard')">Leaderboard</button>
-      <button class="tab" data-view="adminApprovals"    onclick="adminTab(this,'adminApprovals')">Approvals <span id="approvalCount"></span></button>
-      <button class="tab" data-view="adminEvents"       onclick="adminTab(this,'adminEvents')">Events</button>
-      <button class="tab" data-view="adminMembers"      onclick="adminTab(this,'adminMembers')">Members</button>
+    <!-- Content panels -->
+    <div id="contentArea" class="content-area"></div>
+
+    <!-- FAB bar -->
+    <div class="fab-bar" id="fabBar" style="display:none">
+      <button class="fab-btn navy" id="fabYouth" onclick="openModal('addYouth')">+ Add Youth</button>
+      <button class="fab-btn red"  id="fabEvent" onclick="openModal('submitEvent')">+ Submit Event</button>
     </div>
   </div>
 
-  <div class="content">
-    <div id="adminLeaderboard" class="view active"></div>
-    <div id="adminApprovals"   class="view"></div>
-    <div id="adminEvents"      class="view"></div>
-    <div id="adminMembers"     class="view"></div>
+  <!-- MODALS -->
+  <div id="modalOverlay" class="modal-overlay" style="display:none" onclick="closeModal()">
+    <div class="modal-sheet" onclick="event.stopPropagation()" id="modalSheet"></div>
   </div>
-</div>
-
-<!-- ── DIRECTOR VIEW ─────────────────────────────────────── -->
-<div id="directorPage" class="page">
-  <div class="topbar" id="dirTopbar">
-    <div class="topbar-inner">
-      <div class="topbar-avatar" id="dirAvatar"></div>
-      <div class="topbar-info">
-        <div class="topbar-title" id="dirName"></div>
-        <div class="topbar-sub">Director</div>
-      </div>
-      <div style="margin-left:auto;text-align:right">
-        <div class="topbar-pts" id="dirPts">0</div>
-        <div class="topbar-pts-lbl">pts</div>
-      </div>
-      <button class="btn-signout" onclick="doLogout()">Out</button>
-    </div>
-  </div>
-
-  <div class="tab-bar">
-    <div class="tab-bar-inner">
-      <button class="tab active" onclick="dirTab(this,'dirYouth')">My Youth</button>
-      <button class="tab"        onclick="dirTab(this,'dirEvents')">My Events</button>
-      <button class="tab"        onclick="dirTab(this,'dirScore')">My Score</button>
-    </div>
-  </div>
-
-  <div class="content">
-    <div id="dirYouth"  class="view active"></div>
-    <div id="dirEvents" class="view"></div>
-    <div id="dirScore"  class="view"></div>
-  </div>
-
-  <div class="fab-bar">
-    <div class="fab-bar-inner">
-      <button class="fab-btn fab-navy" onclick="openModal('addYouthModal')">+ Add Youth</button>
-      <button class="fab-btn fab-red"  onclick="openModal('addEventModal')">+ Submit Event</button>
-    </div>
-  </div>
-</div>
-
-<!-- ── YOUTH VIEW ────────────────────────────────────────── -->
-<div id="youthPage" class="page">
-  <div class="topbar topbar-youth">
-    <div class="topbar-inner">
-      <div class="topbar-crest">❤️</div>
-      <div class="topbar-info">
-        <div class="topbar-title" id="youthName"></div>
-        <div class="topbar-sub">Youth Member</div>
-      </div>
-      <div id="youthTierBadge" class="tier-badge"></div>
-      <button class="btn-signout" onclick="doLogout()">Out</button>
-    </div>
-  </div>
-
-  <div class="tab-bar">
-    <div class="tab-bar-inner">
-      <button class="tab active" onclick="youthTab(this,'youthHome')">Home</button>
-      <button class="tab"        onclick="youthTab(this,'youthEvents')">Events</button>
-      <button class="tab"        onclick="youthTab(this,'youthMyEvents')">My Submissions</button>
-    </div>
-  </div>
-
-  <div class="content">
-    <div id="youthHome"     class="view active"></div>
-    <div id="youthEvents"   class="view"></div>
-    <div id="youthMyEvents" class="view"></div>
-  </div>
-
-  <div class="fab-bar">
-    <div class="fab-bar-inner">
-      <button class="fab-btn fab-red" style="width:100%" onclick="openModal('addEventModal')">+ Propose an Event</button>
-    </div>
-  </div>
-</div>
-
-<!-- ── MODALS ────────────────────────────────────────────── -->
-
-<!-- Add Youth -->
-<div id="addYouthModal" class="modal-overlay" onclick="closeModalOutside(event,'addYouthModal')">
-  <div class="modal-sheet">
-    <div class="modal-title">Submit Youth for Onboarding</div>
-    <div class="modal-sub">Admin will verify Instagram & WhatsApp before approving. Director earns +1 pt on approval.</div>
-    <div class="field-group"><label class="field-label">Youth Full Name</label><input id="youthNameInput" class="field-input" placeholder="Full name"/></div>
-    <div class="field-group">
-      <label class="field-label">Instagram Handle</label>
-      <div style="position:relative">
-        <span class="at-sign">@</span>
-        <input id="youthIgInput" class="field-input at-input" placeholder="username"/>
-      </div>
-    </div>
-    <div class="field-group"><label class="field-label">WhatsApp (with country code)</label><input id="youthWaInput" class="field-input" placeholder="6591234567" type="tel"/></div>
-    <div class="modal-err" id="youthModalErr"></div>
-    <div class="modal-btns">
-      <button class="btn-outline" onclick="closeModal('addYouthModal')">Cancel</button>
-      <button class="btn-primary" onclick="submitYouth()">Submit for Approval</button>
-    </div>
-  </div>
-</div>
-
-<!-- Add Event -->
-<div id="addEventModal" class="modal-overlay" onclick="closeModalOutside(event,'addEventModal')">
-  <div class="modal-sheet">
-    <div class="modal-title">Submit Event for Approval</div>
-    <div class="modal-sub">Admin must approve. Director earns +10 pts on approval.</div>
-    <div class="field-group"><label class="field-label">Event Name</label><input id="evNameInput" class="field-input" placeholder="e.g. Heritage Walk 2026"/></div>
-    <div class="two-col">
-      <div class="field-group">
-        <label class="field-label">Event Type</label>
-        <select id="evTypeInput" class="field-input">
-          <option>Cultural</option><option>Social</option><option>Education</option>
-          <option>Sports</option><option>Community Service</option><option>Other</option>
-        </select>
-      </div>
-      <div class="field-group"><label class="field-label">Event Date</label><input id="evDateInput" class="field-input" type="date"/></div>
-    </div>
-    <div id="evLeadWarn" class="warn-box" style="display:none">⚠ Date must be at least 12 weeks (3 months) away.</div>
-    <div class="two-col">
-      <div class="field-group"><label class="field-label">Est. Attendance</label><input id="evPaxInput" class="field-input" type="number" placeholder="Min 15"/></div>
-      <div class="field-group"><label class="field-label">Venue</label><input id="evVenueInput" class="field-input" placeholder="Location"/></div>
-    </div>
-    <div class="field-group"><label class="field-label">Youth Primary Organiser</label><input id="evOrgInput" class="field-input" placeholder="Youth's full name"/></div>
-    <div class="field-group"><label class="field-label">Description</label><textarea id="evDescInput" class="field-input" rows="3" placeholder="Brief description..."></textarea></div>
-    <div class="modal-err" id="evModalErr"></div>
-    <div class="modal-btns">
-      <button class="btn-outline" onclick="closeModal('addEventModal')">Cancel</button>
-      <button class="btn-primary btn-red" onclick="submitEvent()">Submit for Approval</button>
-    </div>
-  </div>
-</div>
-
-<!-- Youth Approval -->
-<div id="youthReviewModal" class="modal-overlay" onclick="closeModalOutside(event,'youthReviewModal')">
-  <div class="modal-sheet" id="youthReviewContent"></div>
-</div>
-
-<!-- Event Approval -->
-<div id="eventReviewModal" class="modal-overlay" onclick="closeModalOutside(event,'eventReviewModal')">
-  <div class="modal-sheet" id="eventReviewContent"></div>
-</div>
-
-<!-- QR Scanner -->
-<div id="qrModal" class="modal-overlay" onclick="closeModalOutside(event,'qrModal')">
-  <div class="modal-sheet" id="qrContent"></div>
-</div>
-
-<!-- Loading overlay -->
-<div id="loadingOverlay" class="loading-overlay" style="display:none">
-  <div class="loading-spinner"></div>
 </div>
 
 <?!= include('Script'); ?>
