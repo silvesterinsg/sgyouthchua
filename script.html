@@ -1,831 +1,693 @@
 <script>
-// ═══════════════════════════════════════════════════════════════
-// 济阳蔡氏公会 — Frontend App Logic
-// ═══════════════════════════════════════════════════════════════
+// ── State ─────────────────────────────────────────────────
+let STATE = { currentUser: null, role: null, users: [], events: [], pendingYouth: [], attendance: [], loginRole: 'admin' };
 
-// ── State ────────────────────────────────────────────────────
-var STATE = {
-  currentUser: null,
-  users: [], youth: [], events: [], attend: [],
-  selectedRole: 'admin',
-};
-
-// ── Helpers ──────────────────────────────────────────────────
-function today() {
-  return new Date().toISOString().split('T')[0];
-}
-function daysBetween(d1, d2) {
-  if (!d1 || !d2) return 999;
-  return Math.floor((new Date(d2) - new Date(d1)) / 86400000);
-}
-function getTier(lastActive) {
-  if (!lastActive) return 3;
-  var days = daysBetween(String(lastActive), today());
-  if (days <= 30) return 1;
-  if (days <= 60) return 2;
-  return 3;
-}
-function tierPts(t) { return t === 1 ? 3 : t === 2 ? 2 : 0; }
-function tierLabel(t) { return t === 1 ? 'Tier 1 · Active' : t === 2 ? 'Tier 2 · Fading' : 'Tier 3 · Inactive'; }
-function tierColor(t) { return t === 1 ? '#2e7d32' : t === 2 ? '#b8960c' : '#aaa'; }
-function fmtDate(d) {
-  if (!d) return '—';
-  var dt = new Date(d);
-  return dt.toLocaleDateString('en-SG', { day:'numeric', month:'short', year:'numeric' });
-}
-function weeksUntil(dateStr) {
-  return Math.floor(daysBetween(today(), dateStr) / 7);
-}
+// ── Helpers ───────────────────────────────────────────────
+const today = () => new Date().toISOString().split('T')[0];
+const daysBetween = (d1, d2) => Math.floor((new Date(d2) - new Date(d1)) / 86400000);
+const getTier = la => { if (!la) return 3; const d = daysBetween(la, today()); return d <= 30 ? 1 : d <= 60 ? 2 : 3; };
+const tierPts   = t => t === 1 ? 3 : t === 2 ? 2 : 0;
+const tierLabel = t => t === 1 ? 'Tier 1 · Active' : t === 2 ? 'Tier 2 · Fading' : 'Tier 3 · Inactive';
+const tierColor = t => t === 1 ? '#2e7d32' : t === 2 ? '#b8960c' : '#aaa';
+const fmtDate   = d => { if (!d) return '—'; try { return new Date(d).toLocaleDateString('en-SG',{day:'numeric',month:'short',year:'numeric'}); } catch(e){ return d; }};
+const TYPE_COLORS = {Cultural:'#1a3a6b',Social:'#2e7d32',Education:'#7b1fa2',Sports:'#e65100','Community Service':'#b8960c',Other:'#555'};
+const el = id => document.getElementById(id);
 
 function calcScore(dirId) {
-  var myYouth = STATE.youth.filter(function(y) { return String(y.directorId) === String(dirId) && y.status === 'approved'; });
-  var onboarded = myYouth.length;
-  var engagePts = myYouth.reduce(function(s, y) { return s + tierPts(getTier(y.lastActive)); }, 0);
-  var approvedEvts = STATE.events.filter(function(e) { return String(e.directorId) === String(dirId) && e.status === 'approved'; }).length;
-  var eventPts = approvedEvts * 10;
-  return { onboarded: onboarded, onboardedPts: onboarded, engagePts: engagePts, approvedEvts: approvedEvts, eventPts: eventPts, total: onboarded + engagePts + eventPts };
+  const myYouth = STATE.users.filter(u => u.role === 'youth' && u.directorId === dirId && u.status === 'approved');
+  const onboarded = myYouth.length;
+  const engPts = myYouth.reduce((s, y) => s + tierPts(getTier(y.lastActive)), 0);
+  const evCount = STATE.events.filter(e => e.directorId === dirId && e.status === 'approved').length;
+  return { onboarded, onboardedPts: onboarded, engPts, evCount, evPts: evCount * 10, total: onboarded + engPts + evCount * 10 };
 }
 
-function statusColor(s) { return s === 'approved' ? '#2e7d32' : s === 'pending' ? '#b8960c' : '#c0292b'; }
-function typeColor(t) {
-  var m = { Cultural:'#1a3a6b', Social:'#2e7d32', Education:'#7b1fa2', Sports:'#e65100', 'Community Service':'#b8960c', Other:'#555' };
-  return m[t] || '#555';
+// ── GAS call ──────────────────────────────────────────────
+function call(action, payload, cb) {
+  google.script.run
+    .withSuccessHandler(cb)
+    .withFailureHandler(err => { alert('Error: ' + err.message); })
+    .handleRequest(action, payload || {});
 }
 
-function badge(label, color) {
-  return '<span class="badge" style="background:' + color + '18;color:' + color + '">' + label + '</span>';
+// ── Login ─────────────────────────────────────────────────
+function setRole(role, btn) {
+  STATE.loginRole = role;
+  document.querySelectorAll('.role-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
 }
 
-function scoreBar(label, pts, max, color, detail) {
-  var pct = max > 0 ? Math.min(100, (pts / max) * 100) : 0;
-  return '<div class="score-bar-wrap">' +
-    '<div class="score-bar-labels"><span class="score-bar-left">' + label + '</span><span class="score-bar-right" style="color:' + color + '">' + detail + '</span></div>' +
-    '<div class="score-bar-track"><div class="score-bar-fill" style="width:' + pct + '%;background:' + color + '"></div></div>' +
-    '</div>';
-}
-
-// ── Loading ──────────────────────────────────────────────────
-function showLoading() { document.getElementById('loadingOverlay').style.display = 'flex'; }
-function hideLoading() { document.getElementById('loadingOverlay').style.display = 'none'; }
-
-// ── Pages ────────────────────────────────────────────────────
-function showPage(id) {
-  document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
-  document.getElementById(id).classList.add('active');
-}
-
-// ── Role selector on login ───────────────────────────────────
-function setRole(role) {
-  STATE.selectedRole = role;
-  document.querySelectorAll('.role-tab').forEach(function(t) { t.classList.remove('active'); });
-  document.querySelector('[data-role="' + role + '"]').classList.add('active');
-}
-
-// ── LOGIN ────────────────────────────────────────────────────
 function doLogin() {
-  var username = document.getElementById('loginUser').value.trim();
-  var password = document.getElementById('loginPass').value.trim();
-  if (!password) return;
-  showLoading();
-  google.script.run
-    .withSuccessHandler(function(res) {
-      hideLoading();
-      if (!res.success) {
-        document.getElementById('loginError').textContent = res.error || 'Invalid credentials.';
-        document.getElementById('loginError').style.display = 'block';
-        return;
-      }
-      STATE.currentUser = res.user;
-      loadAllData();
-    })
-    .withFailureHandler(function(err) {
-      hideLoading();
-      document.getElementById('loginError').textContent = 'Login failed: ' + err.message;
-      document.getElementById('loginError').style.display = 'block';
-    })
-    .login(username, password);
-}
-
-function loadAllData() {
-  showLoading();
-  google.script.run
-    .withSuccessHandler(function(res) {
-      hideLoading();
-      if (!res.success) { alert('Failed to load data: ' + res.error); return; }
-      STATE.users  = res.users  || [];
-      STATE.youth  = res.youth  || [];
-      STATE.events = res.events || [];
-      STATE.attend = res.attend || [];
-      routeByRole();
-    })
-    .withFailureHandler(function(err) {
-      hideLoading();
-      alert('Data load failed: ' + err.message);
-    })
-    .loadAll();
-}
-
-function routeByRole() {
-  var role = STATE.currentUser.role;
-  if (role === 'admin')    { renderAdmin();    showPage('adminPage'); }
-  if (role === 'director') { renderDirector(); showPage('directorPage'); }
-  if (role === 'youth')    { renderYouth();    showPage('youthPage'); }
+  const name = el('loginName').value.trim();
+  const pass = el('loginPass').value.trim();
+  if (!pass) return;
+  el('loginBtn').textContent = 'Signing in…';
+  call('login', { username: name, password: pass }, res => {
+    el('loginBtn').textContent = 'Sign In';
+    if (!res.success) { el('loginError').textContent = res.message; el('loginError').style.display = 'block'; return; }
+    el('loginError').style.display = 'none';
+    if (res.user.role !== STATE.loginRole) {
+      el('loginError').textContent = 'Role mismatch. Select correct role tab.';
+      el('loginError').style.display = 'block'; return;
+    }
+    STATE.currentUser = res.user;
+    STATE.role = res.user.role;
+    loadAllData();
+  });
 }
 
 function doLogout() {
-  STATE.currentUser = null;
-  STATE.users = []; STATE.youth = []; STATE.events = []; STATE.attend = [];
-  document.getElementById('loginUser').value = '';
-  document.getElementById('loginPass').value = '';
-  document.getElementById('loginError').style.display = 'none';
-  showPage('loginPage');
+  STATE = { currentUser: null, role: null, users: [], events: [], pendingYouth: [], attendance: [], loginRole: 'admin' };
+  el('loginScreen').style.display = '';
+  el('mainApp').style.display = 'none';
+  el('loginPass').value = '';
 }
 
-// ── Tab switching ────────────────────────────────────────────
-function adminTab(btn, viewId) {
-  document.querySelectorAll('#adminPage .tab').forEach(function(t) { t.classList.remove('active'); });
-  document.querySelectorAll('#adminPage .view').forEach(function(v) { v.classList.remove('active'); });
-  btn.classList.add('active');
-  document.getElementById(viewId).classList.add('active');
-}
-function dirTab(btn, viewId) {
-  document.querySelectorAll('#directorPage .tab').forEach(function(t) { t.classList.remove('active'); });
-  document.querySelectorAll('#directorPage .view').forEach(function(v) { v.classList.remove('active'); });
-  btn.classList.add('active');
-  document.getElementById(viewId).classList.add('active');
-}
-function youthTab(btn, viewId) {
-  document.querySelectorAll('#youthPage .tab').forEach(function(t) { t.classList.remove('active'); });
-  document.querySelectorAll('#youthPage .view').forEach(function(v) { v.classList.remove('active'); });
-  btn.classList.add('active');
-  document.getElementById(viewId).classList.add('active');
+// ── Load all data then render ─────────────────────────────
+function loadAllData() {
+  call('getUsers', {}, r1 => {
+    if (r1.success) STATE.users = r1.data;
+    call('getEvents', {}, r2 => {
+      if (r2.success) STATE.events = r2.data;
+      call('getPendingYouth', {}, r3 => {
+        if (r3.success) STATE.pendingYouth = r3.data;
+        renderApp();
+      });
+    });
+  });
 }
 
-// ── Modals ───────────────────────────────────────────────────
-function openModal(id) { document.getElementById(id).classList.add('open'); }
-function closeModal(id) { document.getElementById(id).classList.remove('open'); }
-function closeModalOutside(e, id) { if (e.target.id === id) closeModal(id); }
+// ── Render shell ──────────────────────────────────────────
+function renderApp() {
+  el('loginScreen').style.display = 'none';
+  el('mainApp').style.display = '';
 
-// ══════════════════════════════════════════════════════════════
-// ADMIN RENDER
-// ══════════════════════════════════════════════════════════════
-function renderAdmin() {
-  document.getElementById('adminName').textContent = STATE.currentUser.name;
+  const u = STATE.currentUser;
+  el('headerSub').textContent = u.role.charAt(0).toUpperCase() + u.role.slice(1) + ' · ' + u.name;
 
-  var allYouth     = STATE.youth.filter(function(y) { return y.status === 'approved'; });
-  var approvedEvts = STATE.events.filter(function(e) { return e.status === 'approved'; });
-  var pendingYouth = STATE.youth.filter(function(y) { return y.status === 'pending'; });
-  var pendingEvts  = STATE.events.filter(function(e) { return e.status === 'pending'; });
-  var totalPending = pendingYouth.length + pendingEvts.length;
+  const pendingY = STATE.pendingYouth.filter(y => y.status === 'pending');
+  const pendingE = STATE.events.filter(e => e.status === 'pending');
+  const totalPending = pendingY.length + pendingE.length;
 
-  document.getElementById('statApprovedYouth').textContent  = allYouth.length;
-  document.getElementById('statApprovedEvents').textContent = approvedEvts.length;
-  document.getElementById('statPending').textContent        = totalPending;
+  // Stats
+  const statInner = el('statStrip');
+  statInner.innerHTML = `<div class="stat-strip-inner">
+    <div class="stat-pill"><div class="stat-icon">👥</div><div class="stat-val" style="color:var(--navy)">${STATE.users.filter(u=>u.role==='youth'&&u.status==='approved').length}</div><div class="stat-lbl">Active Youth</div></div>
+    <div class="stat-pill"><div class="stat-icon">📅</div><div class="stat-val" style="color:var(--red)">${STATE.events.filter(e=>e.status==='approved').length}</div><div class="stat-lbl">Events Done</div></div>
+    <div class="stat-pill"><div class="stat-icon">⏳</div><div class="stat-val" style="color:var(--gold)">${totalPending}</div><div class="stat-lbl">Pending</div></div>
+  </div>`;
 
-  if (totalPending > 0) {
-    var pb = document.getElementById('adminPendingBadge');
-    pb.style.display = 'block';
-    pb.textContent   = totalPending + ' pending';
+  if (STATE.role === 'admin') {
+    if (totalPending > 0) { el('pendingBadge').textContent = totalPending + ' pending'; el('pendingBadge').style.display = ''; }
+    renderAdminTabs();
+  } else if (STATE.role === 'director') {
+    el('headerScore').style.display = '';
+    const s = calcScore(u.id);
+    el('headerScoreNum').textContent = s.total;
+    renderDirectorTabs();
+  } else {
+    renderYouthTabs();
   }
-  var ac = document.getElementById('approvalCount');
-  if (ac) ac.textContent = totalPending > 0 ? ' (' + totalPending + ')' : '';
 
-  renderAdminLeaderboard();
-  renderAdminApprovals();
-  renderAdminEvents();
-  renderAdminMembers();
+  el('fabBar').style.display = '';
+  renderFAB();
 }
 
-function renderAdminLeaderboard() {
-  var directors = STATE.users.filter(function(u) { return u.role === 'director'; });
-  var sorted = directors.slice().sort(function(a, b) { return calcScore(b.id).total - calcScore(a.id).total; });
+// ── FAB ───────────────────────────────────────────────────
+function renderFAB() {
+  const fb = el('fabBar');
+  if (STATE.role === 'youth') {
+    fb.innerHTML = '<div><button class="fab-btn red full" onclick="openModal(\'submitEvent\')">+ Propose an Event</button></div>';
+  } else {
+    fb.innerHTML = '<div><button class="fab-btn navy" onclick="openModal(\'addYouth\')">+ Add Youth</button><button class="fab-btn red" onclick="openModal(\'submitEvent\')">+ Submit Event</button></div>';
+  }
+}
 
-  var html = '<div class="score-key">' +
-    '<div class="score-key-title">Scoring Formula</div>' +
-    [
-      { dot:'#1a3a6b', text:'Onboarding: +1 pt per approved youth' },
-      { dot:'#2e7d32', text:'Engagement Tier 1 (≤30d active): +3 pts/month' },
-      { dot:'#b8960c', text:'Engagement Tier 2 (31–60d): +2 pts/month' },
-      { dot:'#aaa',    text:'Engagement Tier 3 (>60d): +0 pts/month' },
-      { dot:'#c0292b', text:'Youth-led event approved: +10 pts each' },
-    ].map(function(k) {
-      return '<div class="score-key-row"><div class="score-key-dot" style="background:' + k.dot + '"></div><div class="score-key-text">' + k.text + '</div></div>';
-    }).join('') + '</div>';
+// ── ADMIN TABS ────────────────────────────────────────────
+function renderAdminTabs() {
+  const pendingCount = STATE.pendingYouth.filter(y=>y.status==='pending').length + STATE.events.filter(e=>e.status==='pending').length;
+  const tabs = [
+    { id: 'leaderboard', label: 'Leaderboard' },
+    { id: 'approvals',   label: 'Approvals' + (pendingCount > 0 ? ' ('+pendingCount+')' : '') },
+    { id: 'events',      label: 'Events' },
+    { id: 'members',     label: 'Members' },
+  ];
+  renderTabs(tabs, 'leaderboard', renderAdminPanel);
+}
 
-  var medals = ['🥇','🥈','🥉'];
-  sorted.forEach(function(dir, idx) {
-    var s = calcScore(dir.id);
-    var myYouth = STATE.youth.filter(function(y) { return String(y.directorId) === String(dir.id) && y.status === 'approved'; });
-    var pending = STATE.youth.filter(function(y) { return String(y.directorId) === String(dir.id) && y.status === 'pending'; }).length;
-    var color   = dir.color || '#1a3a6b';
-    var rankHtml = idx < 3 ? medals[idx] : '<span class="rank-num">' + (idx+1) + '</span>';
+function renderAdminPanel(tab) {
+  const ca = el('contentArea');
+  if (tab === 'leaderboard') renderLeaderboard(ca);
+  else if (tab === 'approvals') renderApprovals(ca);
+  else if (tab === 'events') renderEvents(ca, true);
+  else if (tab === 'members') renderMembers(ca);
+}
 
-    var chipsHtml = myYouth.map(function(y) {
-      var t = getTier(y.lastActive);
-      return '<span class="chip" style="background:' + tierColor(t) + '14;border-color:' + tierColor(t) + '30;color:' + tierColor(t) + '">' + y.name + ' · T' + t + '</span>';
-    }).join('');
-    if (pending > 0) chipsHtml += '<span class="chip" style="background:#fff8e1;border-color:#b8960c;color:#7a6200">+' + pending + ' pending</span>';
+// ── DIRECTOR TABS ─────────────────────────────────────────
+function renderDirectorTabs() {
+  const tabs = [{ id: 'my-youth', label: 'My Youth' }, { id: 'my-events', label: 'My Events' }, { id: 'score', label: 'My Score' }];
+  renderTabs(tabs, 'my-youth', renderDirectorPanel);
+}
 
-    html += '<div class="card' + (idx===0?' card-top':'') + '" style="border-left:' + (idx===0?'4px solid '+color:'1px solid #dde4f0') + '">' +
-      '<div class="card-row">' +
-        '<span class="medal">' + rankHtml + '</span>' +
-        '<div class="card-avatar" style="background:linear-gradient(135deg,'+color+','+color+'bb);box-shadow:0 2px 8px '+color+'44">' + (dir.avatar||'??') + '</div>' +
-        '<div style="flex:1"><div class="card-name">' + dir.name + '</div><div class="card-sub">' + (dir.zh||'') + '</div></div>' +
-        '<div style="text-align:right"><div class="card-pts" style="color:'+color+'">' + s.total + '</div><div class="card-pts-lbl">pts</div></div>' +
-      '</div>' +
-      scoreBar('Onboarding', s.onboardedPts, 15, '#1a3a6b', s.onboarded + ' youth × 1 pt = ' + s.onboardedPts + ' pts') +
-      scoreBar('Engagement',  s.engagePts,    30, '#2e7d32', s.engagePts + ' pts/month') +
-      scoreBar('Youth Events', s.eventPts,    50, '#c0292b', s.approvedEvts + ' event' + (s.approvedEvts!==1?'s':'') + ' × 10 = ' + s.eventPts + ' pts') +
-      '<div class="chips">' + chipsHtml + '</div>' +
-      '</div>';
+function renderDirectorPanel(tab) {
+  const ca = el('contentArea');
+  if (tab === 'my-youth') renderMyYouth(ca);
+  else if (tab === 'my-events') renderMyEvents(ca);
+  else if (tab === 'score') renderMyScore(ca);
+}
+
+// ── YOUTH TABS ────────────────────────────────────────────
+function renderYouthTabs() {
+  const tabs = [{ id: 'home', label: 'Home' }, { id: 'events', label: 'Events' }, { id: 'my-submissions', label: 'My Submissions' }];
+  renderTabs(tabs, 'home', renderYouthPanel);
+}
+
+function renderYouthPanel(tab) {
+  const ca = el('contentArea');
+  if (tab === 'home') renderYouthHome(ca);
+  else if (tab === 'events') renderYouthEvents(ca);
+  else if (tab === 'my-submissions') renderYouthSubmissions(ca);
+}
+
+// ── Tab renderer ──────────────────────────────────────────
+function renderTabs(tabs, defaultTab, panelFn) {
+  let activeTab = defaultTab;
+  const tb = el('tabBar');
+  const render = () => {
+    tb.innerHTML = tabs.map(t =>
+      `<button class="tab-btn${t.id===activeTab?' active':''}" onclick="switchTab('${t.id}')">${t.label}</button>`
+    ).join('');
+    panelFn(activeTab);
+  };
+  window.switchTab = id => { activeTab = id; render(); };
+  render();
+}
+
+// ── LEADERBOARD ───────────────────────────────────────────
+function renderLeaderboard(ca) {
+  const directors = STATE.users.filter(u => u.role === 'director');
+  const sorted = [...directors].sort((a,b) => calcScore(b.id).total - calcScore(a.id).total);
+  const medals = ['🥇','🥈','🥉'];
+
+  let html = `<div class="scoring-key">
+    <div class="key-title">Scoring Formula</div>
+    ${[
+      {dot:'#1a3a6b', text:'Onboarding: +1 pt per approved youth'},
+      {dot:'#2e7d32', text:'Engagement Tier 1 (≤30d): +3 pts/month'},
+      {dot:'#b8960c', text:'Engagement Tier 2 (31–60d): +2 pts/month'},
+      {dot:'#aaa',    text:'Engagement Tier 3 (>60d): +0 pts/month'},
+      {dot:'#c0292b', text:'Youth-led event approved: +10 pts each'},
+    ].map(k=>`<div class="key-row"><div class="key-dot" style="background:${k.dot}"></div><span class="key-text">${k.text}</span></div>`).join('')}
+  </div>`;
+
+  sorted.forEach((dir, idx) => {
+    const s = calcScore(dir.id);
+    const myYouth = STATE.users.filter(u => u.role==='youth' && u.directorId===dir.id && u.status==='approved');
+    const pending = STATE.pendingYouth.filter(y => y.directorId===dir.id && y.status==='pending').length;
+    const borderLeft = idx === 0 ? `border-left:4px solid ${dir.color||'#1a3a6b'}` : '';
+
+    html += `<div class="dir-card fade-in" style="${borderLeft}${idx===0?';box-shadow:0 4px 20px rgba(26,58,107,0.12)':''}">
+      <div class="dir-header">
+        <span style="font-size:22px;width:28px;text-align:center">${medals[idx]||'<span style="font-size:14px;opacity:0.5">'+(idx+1)+'</span>'}</span>
+        <div class="avatar" style="width:44px;height:44px;background:linear-gradient(135deg,${dir.color||'#1a3a6b'},${dir.color||'#1a3a6b'}bb);box-shadow:0 2px 8px ${dir.color||'#1a3a6b'}44;font-size:14px">${dir.avatar||'??'}</div>
+        <div style="flex:1"><div class="dir-name">${dir.name}</div><div class="dir-zh">${dir.zh||''}</div></div>
+        <div class="dir-pts"><div class="dir-pts-num" style="color:${dir.color||'#1a3a6b'}">${s.total}</div><div class="dir-pts-lbl">pts</div></div>
+      </div>
+      ${scoreBarHTML('Onboarding', s.onboardedPts, 15, '#1a3a6b', `${s.onboarded} youth × 1 pt = ${s.onboardedPts} pts`)}
+      ${scoreBarHTML('Engagement', s.engPts, 30, '#2e7d32', `${s.engPts} pts/month`)}
+      ${scoreBarHTML('Youth Events', s.evPts, 50, '#c0292b', `${s.evCount} event${s.evCount!==1?'s':''} × 10 = ${s.evPts} pts`)}
+      <div class="youth-chips">
+        ${myYouth.map(y=>{const t=getTier(y.lastActive);return`<div class="chip" style="background:${tierColor(t)}14;border-color:${tierColor(t)}30;color:${tierColor(t)}">${y.name} · T${t}</div>`;}).join('')}
+        ${pending>0?`<div class="chip" style="background:#fff8e1;border-color:#b8960c;color:#7a6200">+${pending} pending</div>`:''}
+      </div>
+    </div>`;
+  });
+  ca.innerHTML = html;
+}
+
+function scoreBarHTML(label, pts, max, color, detail) {
+  const pct = max > 0 ? Math.min(100, (pts/max)*100) : 0;
+  return `<div class="score-bar-row">
+    <div class="score-bar-top"><span class="score-bar-label">${label}</span><span class="score-bar-detail" style="color:${color}">${detail}</span></div>
+    <div class="score-bar-bg"><div class="score-bar-fill" style="width:${pct}%;background:${color}"></div></div>
+  </div>`;
+}
+
+// ── APPROVALS ─────────────────────────────────────────────
+function renderApprovals(ca) {
+  const pendingY = STATE.pendingYouth.filter(y => y.status === 'pending');
+  const pendingE = STATE.events.filter(e => e.status === 'pending');
+  const doneY    = STATE.pendingYouth.filter(y => y.status !== 'pending');
+  const doneE    = STATE.events.filter(e => e.status !== 'pending');
+
+  let html = `<div class="section-head"><div class="section-bar" style="background:var(--navy)"></div><div class="section-title">Youth Onboarding</div><div class="section-count" style="background:var(--navy)">${pendingY.length}</div></div>`;
+
+  if (pendingY.length === 0) html += `<div class="empty">No pending youth ✓</div>`;
+  else pendingY.forEach(y => {
+    const dir = STATE.users.find(d => d.id === y.directorId);
+    html += `<div class="approval-row navy">
+      <div style="flex:1"><div class="approval-name">${y.name}</div>
+      <div class="approval-meta">@${y.instagram} · +${y.whatsapp} · via <strong>${dir?.name||'?'}</strong></div></div>
+      <button class="review-btn" style="background:var(--navy)" onclick="openReviewYouth('${y.id}')">Review →</button>
+    </div>`;
   });
 
-  document.getElementById('adminLeaderboard').innerHTML = html;
-}
+  html += `<div class="section-head" style="margin-top:24px"><div class="section-bar" style="background:var(--red)"></div><div class="section-title">Event Approvals</div><div class="section-count" style="background:var(--red)">${pendingE.length}</div></div>`;
 
-function renderAdminApprovals() {
-  var pendingYouth = STATE.youth.filter(function(y) { return y.status === 'pending'; });
-  var pendingEvts  = STATE.events.filter(function(e) { return e.status === 'pending'; });
-
-  var html = '';
-
-  // Youth
-  html += '<div style="margin-bottom:28px">';
-  html += sectionHead('Youth Onboarding Requests', pendingYouth.length, '#1a3a6b');
-  if (pendingYouth.length === 0) {
-    html += '<div class="empty">No pending youth requests ✓</div>';
-  } else {
-    pendingYouth.forEach(function(y) {
-      var dir = STATE.users.find(function(u) { return String(u.id) === String(y.directorId); });
-      html += '<div class="approval-row">' +
-        '<div style="flex:1"><div class="approval-name">' + y.name + '</div>' +
-        '<div class="approval-sub">@' + y.instagram + ' · +' + y.whatsapp + ' · via <strong>' + (dir?dir.name:'?') + '</strong></div></div>' +
-        '<button class="btn-review" style="background:#1a3a6b" onclick="openYouthReview(\'' + y.id + '\')">Review →</button>' +
-        '</div>';
-    });
-  }
-  html += '</div>';
-
-  // Events
-  html += sectionHead('Event Approval Requests', pendingEvts.length, '#c0292b');
-  if (pendingEvts.length === 0) {
-    html += '<div class="empty">No pending events ✓</div>';
-  } else {
-    pendingEvts.forEach(function(ev) {
-      var dir = STATE.users.find(function(u) { return String(u.id) === String(ev.directorId); });
-      var wks = weeksUntil(ev.date);
-      html += '<div class="approval-row red-left">' +
-        '<div style="flex:1">' +
-          '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px">' +
-            '<span class="approval-name">' + ev.name + '</span>' +
-            badge(ev.type, typeColor(ev.type)) +
-            (wks < 12 ? badge('⚠ <12 weeks', '#c0292b') : '') +
-          '</div>' +
-          '<div class="approval-meta"><span>📅 ' + fmtDate(ev.date) + '</span><span>👥 ~' + ev.estPax + ' pax</span><span>📍 ' + (ev.venue||'TBC') + '</span><span>🎓 ' + (dir?dir.name:'?') + '</span></div>' +
-        '</div>' +
-        '<button class="btn-review" style="background:#c0292b" onclick="openEventReview(\'' + ev.id + '\')">Review →</button>' +
-        '</div>';
-    });
-  }
+  if (pendingE.length === 0) html += `<div class="empty">No pending events ✓</div>`;
+  else pendingE.forEach(ev => {
+    const dir = STATE.users.find(d => d.id === ev.directorId);
+    const weeks = ev.date ? Math.floor(daysBetween(today(), ev.date)/7) : 0;
+    const tooSoon = weeks < 12;
+    const tc = TYPE_COLORS[ev.type]||'#555';
+    html += `<div class="approval-row red">
+      <div style="flex:1">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px">
+          <div class="approval-name">${ev.name}</div>
+          <span class="badge" style="background:${tc}18;color:${tc}">${ev.type}</span>
+          ${tooSoon?`<span class="badge" style="background:var(--red)18;color:var(--red)">⚠ &lt;12wks</span>`:''}
+        </div>
+        <div class="approval-meta">📅 ${fmtDate(ev.date)} · 👥 ~${ev.estPax} · 📍 ${ev.venue||'TBC'} · 🎓 ${dir?.name||'?'}</div>
+      </div>
+      <button class="review-btn" style="background:var(--red)" onclick="openReviewEvent('${ev.id}')">Review →</button>
+    </div>`;
+  });
 
   // History
-  var done = STATE.youth.filter(function(y){return y.status!=='pending';}).concat(
-    STATE.events.filter(function(e){return e.status!=='pending';})
-  );
-  if (done.length > 0) {
-    html += '<div style="margin-top:28px">' + sectionHead('Decision History', null, 'rgba(26,58,107,0.45)');
-    done.forEach(function(item) {
-      var isYouth = item.instagram !== undefined;
-      var detail  = isYouth ? '@'+item.instagram : (item.type + ' · ' + fmtDate(item.date));
-      html += '<div class="history-row"><div style="flex:1"><div class="history-name">' + item.name + '</div><div class="history-sub">' + detail + '</div></div>' +
-        badge(item.status==='approved'?'✓ Approved':'✕ Rejected', statusColor(item.status)) + '</div>';
+  if (doneY.length > 0 || doneE.length > 0) {
+    html += `<div class="section-head" style="margin-top:24px"><div class="section-bar" style="background:#aaa"></div><div class="section-title">Decision History</div></div>`;
+    [...doneY.map(y=>({name:y.name,status:y.status,detail:`@${y.instagram}`})),
+     ...doneE.map(e=>({name:e.name,status:e.status,detail:`${e.type} · ${fmtDate(e.date)}`}))
+    ].forEach(item => {
+      const sc = item.status==='approved'?'#2e7d32':'#c0292b';
+      html += `<div class="history-row">
+        <div style="flex:1"><div style="font-weight:700;font-size:13px">${item.name}</div><div style="font-size:11px;color:var(--muted)">${item.detail}</div></div>
+        <span class="badge" style="background:${sc}18;color:${sc}">${item.status==='approved'?'✓ Approved':'✕ Rejected'}</span>
+      </div>`;
     });
-    html += '</div>';
   }
 
-  document.getElementById('adminApprovals').innerHTML = html;
+  ca.innerHTML = html;
 }
 
-function renderAdminEvents() {
-  var sorted = STATE.events.slice().sort(function(a,b){ return new Date(b.date)-new Date(a.date); });
-  var html   = sectionHead('All Events', STATE.events.length, '#c0292b');
+// ── EVENTS LIST ───────────────────────────────────────────
+function renderEvents(ca, isAdmin) {
+  const list = [...STATE.events].sort((a,b) => new Date(b.date)-new Date(a.date));
+  if (list.length === 0) { ca.innerHTML = '<div class="empty">No events yet.</div>'; return; }
+  const sc = {pending:'#b8960c',approved:'#2e7d32',rejected:'#c0292b'};
 
-  sorted.forEach(function(ev) {
-    var dir = STATE.users.find(function(u){ return String(u.id)===String(ev.directorId); });
-    var sc  = statusColor(ev.status);
-    var attendees = Array.isArray(ev.attendees) ? ev.attendees : [];
-    html += '<div class="event-card" style="border-top:3px solid '+sc+';opacity:'+(ev.status==='rejected'?0.6:1)+'">' +
-      '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:10px">' +
-        '<div class="event-title">' + ev.name + '</div>' +
-        badge(ev.status, sc) +
-      '</div>' +
-      '<div class="event-grid">' +
-        eventCell('Type', badge(ev.type, typeColor(ev.type))) +
-        eventCell('Date', fmtDate(ev.date)) +
-        eventCell('Est. Pax', ev.estPax + ' pax') +
-        eventCell('Venue', ev.venue||'TBC') +
-        eventCell('Youth Organiser', ev.youthOrganiser||'—') +
-        eventCell('Director', dir?dir.name:'—') +
-        eventCell('Checked In', attendees.length + ' / ' + ev.estPax) +
-        eventCell('Submitted', fmtDate(ev.submittedDate)) +
-      '</div>' +
-      (ev.description ? '<div class="event-desc">' + ev.description + '</div>' : '') +
-      (ev.status==='approved' ? '<button class="btn-review" style="background:#1a3a6b" onclick="openQR(\'' + ev.id + '\')">📷 Scan Attendance</button>' : '') +
-      (ev.status==='pending'  ? '<button class="btn-review" style="background:#c0292b;margin-top:10px" onclick="openEventReview(\'' + ev.id + '\')">Admin Review →</button>' : '') +
-      '</div>';
+  let html = '';
+  list.forEach(ev => {
+    const dir = STATE.users.find(d => d.id === ev.directorId);
+    const tc = TYPE_COLORS[ev.type]||'#555';
+    html += `<div class="event-card" style="border-top:3px solid ${sc[ev.status]||'#aaa'};opacity:${ev.status==='rejected'?0.6:1}">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:10px">
+        <div style="font-family:var(--serif);font-weight:700;color:var(--navy);font-size:15px">${ev.name}</div>
+        <span class="badge" style="background:${sc[ev.status]||'#aaa'}18;color:${sc[ev.status]||'#aaa'}">${ev.status}</span>
+      </div>
+      <div class="event-grid">
+        <div class="event-cell"><div class="event-cell-label">Type</div><div class="event-cell-val"><span class="badge" style="background:${tc}18;color:${tc}">${ev.type}</span></div></div>
+        <div class="event-cell"><div class="event-cell-label">Date</div><div class="event-cell-val">${fmtDate(ev.date)}</div></div>
+        <div class="event-cell"><div class="event-cell-label">Est. Pax</div><div class="event-cell-val">${ev.estPax} pax</div></div>
+        <div class="event-cell"><div class="event-cell-label">Venue</div><div class="event-cell-val">${ev.venue||'TBC'}</div></div>
+        <div class="event-cell"><div class="event-cell-label">Youth Organiser</div><div class="event-cell-val">${ev.youthOrganiser||'—'}</div></div>
+        <div class="event-cell"><div class="event-cell-label">Director</div><div class="event-cell-val">${dir?.name||'—'}</div></div>
+        <div class="event-cell"><div class="event-cell-label">Checked In</div><div class="event-cell-val">${ev.attendees.length} / ${ev.estPax}</div></div>
+        <div class="event-cell"><div class="event-cell-label">Submitted</div><div class="event-cell-val">${fmtDate(ev.submittedDate)}</div></div>
+      </div>
+      ${ev.description?`<div style="font-size:12px;color:var(--muted);margin-bottom:10px;line-height:1.5">${ev.description}</div>`:''}
+      ${isAdmin && ev.status==='approved'?`<button onclick="openQRScanner('${ev.id}')" style="background:var(--navy);color:#fff;border:none;border-radius:8px;padding:8px 16px;font-family:var(--serif);font-weight:700;font-size:12px;cursor:pointer">📷 Scan Attendance</button>`:''}
+    </div>`;
   });
-
-  document.getElementById('adminEvents').innerHTML = html;
+  ca.innerHTML = html;
 }
 
-function renderAdminMembers() {
-  var approved = STATE.youth.filter(function(y){ return y.status==='approved'; });
-  var html = sectionHead('All Youth Members', approved.length, '#1a3a6b');
-
-  approved.forEach(function(y) {
-    var t   = getTier(y.lastActive);
-    var dir = STATE.users.find(function(u){ return String(u.id)===String(y.directorId); });
-    html += '<div class="member-row">' +
-      '<div class="tier-circle" style="background:'+tierColor(t)+'20;border-color:'+tierColor(t)+';color:'+tierColor(t)+'">T'+t+'</div>' +
-      '<div style="flex:1">' +
-        '<div class="approval-name">' + y.name + ' <span style="font-weight:400;opacity:0.5;font-size:12px">' + (y.zh||'') + '</span></div>' +
-        '<div class="approval-sub">' + (dir?dir.name:'?') + ' · Last active: ' + fmtDate(y.lastActive) + ' · ' + tierLabel(t) + '</div>' +
-      '</div>' +
-      badge('+' + tierPts(t) + ' pts/mo', tierColor(t)) +
-      '</div>';
+// ── MEMBERS ───────────────────────────────────────────────
+function renderMembers(ca) {
+  const youth = STATE.users.filter(u => u.role === 'youth' && u.status === 'approved');
+  if (youth.length === 0) { ca.innerHTML = '<div class="empty">No approved members yet.</div>'; return; }
+  let html = `<div class="section-head"><div class="section-bar" style="background:var(--navy)"></div><div class="section-title">All Youth Members</div><div class="section-count" style="background:var(--navy)">${youth.length}</div></div>`;
+  youth.forEach(y => {
+    const t = getTier(y.lastActive);
+    const dir = STATE.users.find(d => d.id === y.directorId);
+    html += `<div class="member-row">
+      <div class="tier-badge-circle" style="background:${tierColor(t)}20;border-color:${tierColor(t)};color:${tierColor(t)}">T${t}</div>
+      <div style="flex:1">
+        <div style="font-family:var(--serif);font-weight:700;font-size:14px">${y.name} <span style="opacity:0.5;font-size:12px">${y.zh||''}</span></div>
+        <div style="font-size:11px;color:var(--muted)">${dir?.name||'?'} · Last active: ${fmtDate(y.lastActive)} · ${tierLabel(t)}</div>
+      </div>
+      <span class="badge" style="background:${tierColor(t)}18;color:${tierColor(t)}">+${tierPts(t)} pts/mo</span>
+    </div>`;
   });
-
-  document.getElementById('adminMembers').innerHTML = html;
+  ca.innerHTML = html;
 }
 
-// ── Youth Review Modal ───────────────────────────────────────
-function openYouthReview(youthId) {
-  var y   = STATE.youth.find(function(u){ return String(u.id)===String(youthId); });
-  var dir = STATE.users.find(function(u){ return String(u.id)===String(y.directorId); });
-  var html = '<div class="modal-title">Review Youth Onboarding</div>' +
-    '<div class="modal-sub">Open profiles → add to both groups → then approve.</div>' +
-    '<div style="background:#fdf8f0;border:1px solid #dde4f0;border-radius:12px;padding:16px;margin-bottom:16px">' +
-      '<div class="card-name">' + y.name + '</div>' +
-      '<div style="font-size:12px;color:rgba(26,58,107,0.45);margin-top:4px">Submitted by director: <strong>' + (dir?dir.name:'?') + '</strong></div>' +
-    '</div>' +
-    '<div style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px">' +
-      '<a href="https://wa.me/' + y.whatsapp + '" target="_blank" style="display:flex;align-items:center;gap:12px;background:#e8f5e9;border:1.5px solid #2e7d32;border-radius:12px;padding:14px 16px;text-decoration:none">' +
-        '<span style="font-size:26px">💬</span>' +
-        '<div style="flex:1"><div style="font-family:\'Noto Serif SC\',serif;font-weight:700;color:#2e7d32;font-size:14px">Open WhatsApp</div>' +
-        '<div style="font-size:11px;color:rgba(26,58,107,0.45)">+' + y.whatsapp + ' · add to clan WhatsApp group</div></div>' +
-        '<span style="color:#2e7d32;font-size:18px">↗</span>' +
-      '</a>' +
-      '<a href="https://instagram.com/' + y.instagram + '" target="_blank" style="display:flex;align-items:center;gap:12px;background:#fce4ec;border:1.5px solid #c0292b;border-radius:12px;padding:14px 16px;text-decoration:none">' +
-        '<span style="font-size:26px">📸</span>' +
-        '<div style="flex:1"><div style="font-family:\'Noto Serif SC\',serif;font-weight:700;color:#c0292b;font-size:14px">Open Instagram</div>' +
-        '<div style="font-size:11px;color:rgba(26,58,107,0.45)">@' + y.instagram + ' · follow & add to clan IG group</div></div>' +
-        '<span style="color:#c0292b;font-size:18px">↗</span>' +
-      '</a>' +
-    '</div>' +
-    '<div class="info-box">✓ Confirm youth has joined <strong>both</strong> WhatsApp and Instagram before approving.</div>' +
-    '<div class="modal-btns">' +
-      '<button class="btn-outline btn-red-outline" onclick="rejectYouth(\'' + youthId + '\')">✕ Reject</button>' +
-      '<button class="btn-primary btn-green" onclick="approveYouth(\'' + youthId + '\')">✓ Approve · +1 pt</button>' +
-    '</div>';
-  document.getElementById('youthReviewContent').innerHTML = html;
-  openModal('youthReviewModal');
-}
-
-function approveYouth(id) {
-  showLoading();
-  google.script.run
-    .withSuccessHandler(function(res) {
-      hideLoading();
-      if (!res.success) { alert('Error: ' + res.error); return; }
-      var y = STATE.youth.find(function(u){ return String(u.id)===String(id); });
-      if (y) { y.status = 'approved'; y.joinedDate = today(); }
-      closeModal('youthReviewModal');
-      renderAdmin();
-    })
-    .withFailureHandler(function(e){ hideLoading(); alert('Error: '+e.message); })
-    .approveYouth(id);
-}
-
-function rejectYouth(id) {
-  showLoading();
-  google.script.run
-    .withSuccessHandler(function(res) {
-      hideLoading();
-      if (!res.success) { alert('Error: ' + res.error); return; }
-      var y = STATE.youth.find(function(u){ return String(u.id)===String(id); });
-      if (y) y.status = 'rejected';
-      closeModal('youthReviewModal');
-      renderAdmin();
-    })
-    .withFailureHandler(function(e){ hideLoading(); alert('Error: '+e.message); })
-    .rejectYouth(id);
-}
-
-// ── Event Review Modal ───────────────────────────────────────
-function openEventReview(eventId) {
-  var ev  = STATE.events.find(function(e){ return String(e.id)===String(eventId); });
-  var dir = STATE.users.find(function(u){ return String(u.id)===String(ev.directorId); });
-  var wks = weeksUntil(ev.date);
-  var html = '<div class="modal-title">Review Event Submission</div>' +
-    '<div class="modal-sub">Verify all details before awarding +10 pts.</div>' +
-    '<div class="detail-grid">' +
-      detailCell('Event Name', ev.name, true) +
-      detailCell('Type', badge(ev.type, typeColor(ev.type))) +
-      detailCell('Date', fmtDate(ev.date)) +
-      detailCell('Weeks Away', '<span style="color:'+(wks<12?'#c0292b':'#2e7d32')+';font-weight:700">' + wks + ' weeks ' + (wks<12?'⚠ too soon':'✓') + '</span>') +
-      detailCell('Est. Pax', ev.estPax + ' pax') +
-      detailCell('Venue', ev.venue||'—') +
-      detailCell('Youth Organiser', ev.youthOrganiser||'—') +
-      detailCell('Director / Mentor', dir?dir.name:'—') +
-      detailCell('Submitted By', ev.submittedByRole||'—') +
-      detailCell('Submitted On', fmtDate(ev.submittedDate)) +
-    '</div>' +
-    (ev.description ? '<div class="detail-grid"><div class="detail-cell full"><div class="detail-label">Description</div><div style="font-size:13px;color:#1a3a6b;line-height:1.5">' + ev.description + '</div></div></div>' : '') +
-    (wks < 12 ? '<div class="warn-box" style="margin-bottom:14px">⚠ Event is less than 12 weeks away. Policy requires 3-month advance notice.</div>' : '') +
-    (ev.estPax < 15 ? '<div class="warn-box" style="background:#ffebee;border-color:#c0292b;color:#c0292b;margin-bottom:14px">⚠ Est. attendance below required 15 pax minimum.</div>' : '') +
-    '<div class="modal-btns">' +
-      '<button class="btn-outline btn-red-outline" onclick="rejectEvent(\'' + eventId + '\')">✕ Reject</button>' +
-      '<button class="btn-primary btn-green" onclick="approveEvent(\'' + eventId + '\')">✓ Approve · +10 pts</button>' +
-    '</div>';
-  document.getElementById('eventReviewContent').innerHTML = html;
-  openModal('eventReviewModal');
-}
-
-function approveEvent(id) {
-  showLoading();
-  google.script.run
-    .withSuccessHandler(function(res) {
-      hideLoading();
-      if (!res.success) { alert('Error: ' + res.error); return; }
-      var ev = STATE.events.find(function(e){ return String(e.id)===String(id); });
-      if (ev) ev.status = 'approved';
-      closeModal('eventReviewModal');
-      renderAdmin();
-    })
-    .withFailureHandler(function(e){ hideLoading(); alert('Error: '+e.message); })
-    .approveEvent(id);
-}
-
-function rejectEvent(id) {
-  showLoading();
-  google.script.run
-    .withSuccessHandler(function(res) {
-      hideLoading();
-      if (!res.success) { alert('Error: ' + res.error); return; }
-      var ev = STATE.events.find(function(e){ return String(e.id)===String(id); });
-      if (ev) ev.status = 'rejected';
-      closeModal('eventReviewModal');
-      renderAdmin();
-    })
-    .withFailureHandler(function(e){ hideLoading(); alert('Error: '+e.message); })
-    .rejectEvent(id);
-}
-
-// ── QR Scanner ───────────────────────────────────────────────
-function openQR(eventId) {
-  var ev = STATE.events.find(function(e){ return String(e.id)===String(eventId); });
-  var attendees = Array.isArray(ev.attendees) ? ev.attendees : [];
-  var eligible  = STATE.youth.filter(function(y){
-    return y.status==='approved' && !attendees.includes(String(y.id));
+// ── DIRECTOR PANELS ───────────────────────────────────────
+function renderMyYouth(ca) {
+  const u = STATE.currentUser;
+  const myY = STATE.users.filter(y => y.role === 'youth' && y.directorId === u.id);
+  if (myY.length === 0) { ca.innerHTML = '<div class="empty">No youth submitted yet. Use + Add Youth below.</div>'; return; }
+  let html = `<div class="section-head"><div class="section-bar" style="background:var(--navy)"></div><div class="section-title">My Youth</div><div class="section-count" style="background:var(--navy)">${myY.filter(y=>y.status==='approved').length}</div></div>`;
+  myY.forEach(y => {
+    const t = getTier(y.lastActive);
+    const statusColor = {approved:'#2e7d32',pending:'#b8960c',rejected:'#c0292b'}[y.status]||'#aaa';
+    html += `<div class="member-row">
+      <div class="tier-badge-circle" style="background:${y.status==='approved'?tierColor(t)+'20':'#f5f5f5'};border-color:${y.status==='approved'?tierColor(t):'#ddd'};color:${y.status==='approved'?tierColor(t):'#aaa'}">${y.status==='approved'?'T'+t:'?'}</div>
+      <div style="flex:1">
+        <div style="font-family:var(--serif);font-weight:700;font-size:14px">${y.name}</div>
+        <div style="font-size:11px;color:var(--muted)">${y.status==='approved'?`Last active: ${fmtDate(y.lastActive)} · ${tierLabel(t)}`:`Status: ${y.status}`}</div>
+      </div>
+      <span class="badge" style="background:${statusColor}18;color:${statusColor}">${y.status}</span>
+    </div>`;
   });
-
-  var checkedHtml = '';
-  if (attendees.length > 0) {
-    checkedHtml = '<div style="margin-top:14px">' +
-      '<div style="font-size:11px;color:#2e7d32;text-transform:uppercase;letter-spacing:0.7px;margin-bottom:8px">✓ Checked in (' + attendees.length + ')</div>' +
-      '<div class="chips">' +
-      attendees.map(function(aid) {
-        var u = STATE.youth.find(function(y){ return String(y.id)===String(aid); });
-        return u ? '<span class="chip" style="background:#2e7d3214;border-color:#2e7d3230;color:#2e7d32">' + u.name + '</span>' : '';
-      }).join('') + '</div></div>';
-  }
-
-  var listHtml = eligible.length === 0
-    ? '<div class="empty" style="padding:16px 0">All eligible youth already checked in</div>'
-    : eligible.map(function(u) {
-        return '<button class="qr-scan-item" onclick="confirmScan(\'' + eventId + '\',\'' + u.id + '\',\'' + u.name + '\')">' +
-          '<span style="font-size:18px">🪪</span>' +
-          '<div><div style="font-family:\'Noto Serif SC\',serif;font-weight:700;color:#1a3a6b;font-size:13px">' + u.name + '</div>' +
-          '<div style="font-size:11px;color:rgba(26,58,107,0.45)">' + (u.zh||'') + '</div></div>' +
-        '</button>';
-      }).join('');
-
-  var html = '<div class="modal-title">📷 Attendance · ' + ev.name + '</div>' +
-    '<div class="modal-sub">' + fmtDate(ev.date) + ' · ' + attendees.length + ' checked in</div>' +
-    '<div class="qr-viewport">' +
-      '<div class="qr-grid"></div>' +
-      '<div class="qr-corner" style="top:24px;left:24px;border-right:none;border-bottom:none"></div>' +
-      '<div class="qr-corner" style="top:24px;right:24px;border-left:none;border-bottom:none"></div>' +
-      '<div class="qr-corner" style="bottom:24px;left:24px;border-right:none;border-top:none"></div>' +
-      '<div class="qr-corner" style="bottom:24px;right:24px;border-left:none;border-top:none"></div>' +
-      '<div style="text-align:center"><div style="font-size:36px;margin-bottom:8px">📷</div>' +
-      '<div style="color:rgba(255,255,255,0.5);font-size:12px">Tap member below to simulate scan</div></div>' +
-    '</div>' +
-    '<div style="font-size:11px;color:rgba(26,58,107,0.45);text-transform:uppercase;letter-spacing:0.7px;margin-bottom:10px">Select member to check in</div>' +
-    '<div class="qr-scan-list">' + listHtml + '</div>' +
-    checkedHtml +
-    '<div class="modal-btns" style="margin-top:16px"><button class="btn-outline" onclick="closeModal(\'qrModal\')">Close</button></div>';
-
-  document.getElementById('qrContent').innerHTML = html;
-  openModal('qrModal');
+  ca.innerHTML = html;
 }
 
-function confirmScan(eventId, youthId, youthName) {
-  if (!confirm('Check in ' + youthName + '?')) return;
-  showLoading();
-  google.script.run
-    .withSuccessHandler(function(res) {
-      hideLoading();
-      if (!res.success) { alert('Error: ' + res.error); return; }
-      // Update local state
-      var ev = STATE.events.find(function(e){ return String(e.id)===String(eventId); });
-      if (ev) {
-        if (!Array.isArray(ev.attendees)) ev.attendees = [];
-        if (!ev.attendees.includes(String(youthId))) ev.attendees.push(String(youthId));
-      }
-      var y = STATE.youth.find(function(u){ return String(u.id)===String(youthId); });
-      if (y) y.lastActive = today();
-      closeModal('qrModal');
-      renderAdmin();
-    })
-    .withFailureHandler(function(e){ hideLoading(); alert('Error: '+e.message); })
-    .logAttendance(eventId, youthId);
-}
-
-// ══════════════════════════════════════════════════════════════
-// DIRECTOR RENDER
-// ══════════════════════════════════════════════════════════════
-function renderDirector() {
-  var dir   = STATE.currentUser;
-  var color = dir.color || '#1a3a6b';
-  var s     = calcScore(dir.id);
-
-  document.getElementById('dirName').textContent = dir.name;
-  document.getElementById('dirPts').textContent  = s.total;
-  var topbar = document.getElementById('dirTopbar');
-  if (topbar) topbar.style.background = color;
-  var av = document.getElementById('dirAvatar');
-  if (av) {
-    av.textContent   = dir.avatar || '??';
-    av.style.background = 'rgba(255,255,255,0.25)';
-  }
-
-  renderDirYouth();
-  renderDirEvents();
-  renderDirScore();
-}
-
-function renderDirYouth() {
-  var myYouth = STATE.youth.filter(function(y){ return String(y.directorId)===String(STATE.currentUser.id); });
-  var html = sectionHead('My Youth Members', myYouth.filter(function(y){return y.status==='approved';}).length, '#1a3a6b');
-
-  if (myYouth.length === 0) { html += '<div class="empty">No youth submitted yet.</div>'; }
-  myYouth.forEach(function(y) {
-    var t  = getTier(y.lastActive);
-    var sc = statusColor(y.status);
-    html += '<div class="member-row">' +
-      '<div class="tier-circle" style="background:'+(y.status==='approved'?tierColor(t)+'20':'#f5f5f5')+';border-color:'+(y.status==='approved'?tierColor(t):'#ddd')+';color:'+(y.status==='approved'?tierColor(t):'#aaa')+'">' + (y.status==='approved'?'T'+t:'?') + '</div>' +
-      '<div style="flex:1">' +
-        '<div class="approval-name">' + y.name + '</div>' +
-        '<div class="approval-sub">' + (y.status==='approved' ? 'Last active: '+fmtDate(y.lastActive)+' · '+tierLabel(t) : 'Status: '+y.status) + '</div>' +
-      '</div>' +
-      badge(y.status, sc) +
-      '</div>';
+function renderMyEvents(ca) {
+  const u = STATE.currentUser;
+  const myE = STATE.events.filter(e => e.directorId === u.id);
+  if (myE.length === 0) { ca.innerHTML = '<div class="empty">No events submitted.</div>'; return; }
+  const sc = {pending:'#b8960c',approved:'#2e7d32',rejected:'#c0292b'};
+  let html = '';
+  myE.forEach(ev => {
+    html += `<div class="card" style="border-left:4px solid ${sc[ev.status]||'#aaa'}">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:6px">
+        <div style="font-family:var(--serif);font-weight:700;font-size:14px">${ev.name}</div>
+        <span class="badge" style="background:${sc[ev.status]||'#aaa'}18;color:${sc[ev.status]||'#aaa'}">${ev.status}</span>
+      </div>
+      <div style="font-size:11px;color:var(--muted);display:flex;gap:10px;flex-wrap:wrap">
+        <span>📅 ${fmtDate(ev.date)}</span><span>👥 ~${ev.estPax} pax</span><span>✅ ${ev.attendees.length} checked in</span>
+      </div>
+    </div>`;
   });
-  document.getElementById('dirYouth').innerHTML = html;
+  ca.innerHTML = html;
 }
 
-function renderDirEvents() {
-  var myEvents = STATE.events.filter(function(e){ return String(e.directorId)===String(STATE.currentUser.id); });
-  var html = sectionHead('My Events', myEvents.length, '#c0292b');
-
-  if (myEvents.length === 0) { html += '<div class="empty">No events submitted.</div>'; }
-  myEvents.forEach(function(ev) {
-    var sc = statusColor(ev.status);
-    var attendees = Array.isArray(ev.attendees) ? ev.attendees : [];
-    html += '<div style="background:#fff;border:1px solid #dde4f0;border-radius:12px;padding:14px 16px;margin-bottom:10px;border-left:4px solid '+sc+'">' +
-      '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:6px">' +
-        '<div class="approval-name">' + ev.name + '</div>' + badge(ev.status, sc) +
-      '</div>' +
-      '<div class="approval-meta"><span>📅 ' + fmtDate(ev.date) + '</span><span>👥 ~' + ev.estPax + ' pax</span><span>✅ ' + attendees.length + ' checked in</span></div>' +
-      '</div>';
+function renderMyScore(ca) {
+  const u = STATE.currentUser;
+  const s = calcScore(u.id);
+  const myY = STATE.users.filter(y => y.role==='youth' && y.directorId===u.id && y.status==='approved');
+  let html = `<div class="card">
+    <div class="score-big"><div class="score-big-num" style="color:${u.color||'var(--navy)'}">${s.total}</div><div class="score-big-lbl">Total Points</div></div>
+    ${scoreBarHTML('Onboarding', s.onboardedPts, 15, '#1a3a6b', `${s.onboarded} youth × 1 pt = ${s.onboardedPts} pts`)}
+    ${scoreBarHTML('Engagement', s.engPts, 30, '#2e7d32', `${s.engPts} pts/month`)}
+    ${scoreBarHTML('Youth Events', s.evPts, 50, '#c0292b', `${s.evCount} events × 10 = ${s.evPts} pts`)}
+  </div>
+  <div class="section-head"><div class="section-bar" style="background:#2e7d32"></div><div class="section-title">Youth Tier Breakdown</div></div>`;
+  myY.forEach(y => {
+    const t = getTier(y.lastActive);
+    html += `<div class="card" style="display:flex;align-items:center;gap:10px">
+      <div style="flex:1"><div style="font-family:var(--serif);font-weight:600;font-size:13px">${y.name}</div>
+      <div style="font-size:11px;color:var(--muted)">Last active: ${fmtDate(y.lastActive)}</div></div>
+      <div style="text-align:right">
+        <span class="badge" style="background:${tierColor(t)}18;color:${tierColor(t)}">${tierLabel(t)}</span>
+        <div style="font-size:11px;color:${tierColor(t)};font-weight:700;margin-top:4px">+${tierPts(t)} pts/mo</div>
+      </div>
+    </div>`;
   });
-  document.getElementById('dirEvents').innerHTML = html;
+  ca.innerHTML = html;
 }
 
-function renderDirScore() {
-  var s     = calcScore(STATE.currentUser.id);
-  var color = STATE.currentUser.color || '#1a3a6b';
-  var myYouth = STATE.youth.filter(function(y){ return String(y.directorId)===String(STATE.currentUser.id) && y.status==='approved'; });
+// ── YOUTH PANELS ──────────────────────────────────────────
+function renderYouthHome(ca) {
+  const u = STATE.currentUser;
+  const t = getTier(u.lastActive);
+  const dir = STATE.users.find(d => d.id === u.directorId);
+  ca.innerHTML = `
+    <div class="status-card">
+      <div style="font-size:11px;opacity:.6;letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">Your Status</div>
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
+        <div style="width:44px;height:44px;border-radius:50%;background:${tierColor(t)};display:flex;align-items:center;justify-content:center;font-family:var(--serif);font-weight:900;font-size:18px;color:#fff">T${t}</div>
+        <div><div style="font-family:var(--serif);font-weight:700;font-size:16px">${tierLabel(t)}</div>
+        <div style="font-size:11px;opacity:.6">Last active: ${fmtDate(u.lastActive)}</div></div>
+        <div style="margin-left:auto;text-align:right">
+          <div style="font-family:var(--serif);font-weight:900;font-size:22px;color:${tierColor(t)}">${tierPts(t)}</div>
+          <div style="font-size:9px;opacity:.6;text-transform:uppercase;letter-spacing:1px">pts/mo</div>
+        </div>
+      </div>
+      <div style="background:rgba(255,255,255,0.1);border-radius:8px;padding:8px 12px;font-size:12px;opacity:.8">
+        Director: ${dir?.name||'?'} · Stay Tier 1 by attending events within 30 days.
+      </div>
+    </div>
+    <div class="qr-card">
+      <div style="font-size:11px;color:var(--muted);letter-spacing:1px;text-transform:uppercase;margin-bottom:12px">Your Membership QR</div>
+      <div class="qr-box"><div style="font-size:36px">🪪</div><div style="font-size:9px;color:var(--muted);margin-top:4px">${u.id}</div></div>
+      <div style="font-family:var(--serif);font-weight:700;font-size:14px">${u.name}</div>
+      <div style="font-size:11px;color:var(--muted);margin-top:2px">Show this at events for check-in</div>
+    </div>`;
+}
 
-  var html = '<div style="background:#fff;border:1px solid #dde4f0;border-radius:16px;padding:20px;margin-bottom:16px">' +
-    '<div style="text-align:center;margin-bottom:20px">' +
-      '<div style="font-family:\'Noto Serif SC\',serif;font-weight:900;font-size:52px;color:'+color+';line-height:1">' + s.total + '</div>' +
-      '<div style="font-size:12px;color:rgba(26,58,107,0.45);letter-spacing:1px;text-transform:uppercase;margin-top:4px">Total Points</div>' +
-    '</div>' +
-    scoreBar('Onboarding', s.onboardedPts, 15, '#1a3a6b', s.onboarded + ' youth × 1 pt = ' + s.onboardedPts + ' pts') +
-    scoreBar('Engagement',  s.engagePts,   30, '#2e7d32', s.engagePts + ' pts this month') +
-    scoreBar('Youth Events', s.eventPts,   50, '#c0292b', s.approvedEvts + ' events × 10 = ' + s.eventPts + ' pts') +
-    '</div>';
-
-  html += sectionHead('Youth Tier Breakdown', null, '#2e7d32');
-  myYouth.forEach(function(y) {
-    var t = getTier(y.lastActive);
-    html += '<div style="background:#fff;border:1px solid #dde4f0;border-radius:10px;padding:12px 14px;margin-bottom:8px;display:flex;align-items:center;gap:10px">' +
-      '<div style="flex:1"><div style="font-family:\'Noto Serif SC\',serif;font-weight:600;color:#1a3a6b;font-size:13px">' + y.name + '</div>' +
-      '<div style="font-size:11px;color:rgba(26,58,107,0.45)">Last active: ' + fmtDate(y.lastActive) + '</div></div>' +
-      '<div style="text-align:right">' + badge(tierLabel(t), tierColor(t)) +
-      '<div style="font-size:11px;color:'+tierColor(t)+';font-weight:700;margin-top:4px">+' + tierPts(t) + ' pts/mo</div></div>' +
-      '</div>';
+function renderYouthEvents(ca) {
+  const u = STATE.currentUser;
+  const upcoming = STATE.events.filter(e => e.status==='approved' && new Date(e.date) >= new Date())
+    .sort((a,b) => new Date(a.date)-new Date(b.date));
+  if (upcoming.length === 0) { ca.innerHTML = '<div class="empty">No upcoming events.</div>'; return; }
+  let html = `<div class="section-head"><div class="section-bar" style="background:var(--red)"></div><div class="section-title">Upcoming Events</div></div>`;
+  upcoming.forEach(ev => {
+    const attended = ev.attendees.includes(u.id);
+    html += `<div class="card" style="border-left:4px solid ${attended?'#2e7d32':'#c0292b'}">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:6px">
+        <div style="font-family:var(--serif);font-weight:700;font-size:14px">${ev.name}</div>
+        ${attended?`<span class="badge" style="background:#2e7d3218;color:#2e7d32">✓ Attended</span>`:''}
+      </div>
+      <div style="font-size:11px;color:var(--muted);display:flex;gap:10px;flex-wrap:wrap">
+        <span>📅 ${fmtDate(ev.date)}</span><span>📍 ${ev.venue||'TBC'}</span><span>👥 ~${ev.estPax}</span>
+      </div>
+      ${ev.description?`<div style="font-size:12px;color:var(--muted);margin-top:6px;line-height:1.5">${ev.description}</div>`:''}
+    </div>`;
   });
-  if (myYouth.length === 0) html += '<div class="empty">No approved youth yet.</div>';
-
-  document.getElementById('dirScore').innerHTML = html;
+  ca.innerHTML = html;
 }
 
-// ══════════════════════════════════════════════════════════════
-// YOUTH RENDER
-// ══════════════════════════════════════════════════════════════
-function renderYouth() {
-  var y   = STATE.currentUser;
-  var t   = getTier(y.lastActive);
-  var dir = STATE.users.find(function(u){ return String(u.id)===String(y.directorId); });
-
-  document.getElementById('youthName').textContent = y.name;
-  var tb = document.getElementById('youthTierBadge');
-  tb.textContent = tierLabel(t);
-  tb.style.background = tierColor(t) + '30';
-  tb.style.color = tierColor(t);
-
-  renderYouthHome();
-  renderYouthEvents();
-  renderYouthMyEvents();
-}
-
-function renderYouthHome() {
-  var y   = STATE.currentUser;
-  var t   = getTier(y.lastActive);
-  var dir = STATE.users.find(function(u){ return String(u.id)===String(y.directorId); });
-
-  var html = '<div class="status-card">' +
-    '<div style="font-size:11px;opacity:0.6;letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">Your Membership Status</div>' +
-    '<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">' +
-      '<div style="width:44px;height:44px;border-radius:50%;background:'+tierColor(t)+';display:flex;align-items:center;justify-content:center;font-family:\'Noto Serif SC\',serif;font-weight:900;font-size:18px;color:#fff">T' + t + '</div>' +
-      '<div style="flex:1">' +
-        '<div style="font-family:\'Noto Serif SC\',serif;font-weight:700;font-size:16px">' + tierLabel(t) + '</div>' +
-        '<div style="font-size:11px;opacity:0.6">Last active: ' + fmtDate(y.lastActive) + '</div>' +
-      '</div>' +
-      '<div style="margin-left:auto;text-align:right">' +
-        '<div style="font-family:\'Noto Serif SC\',serif;font-weight:900;font-size:22px;color:'+tierColor(t)+'">' + tierPts(t) + '</div>' +
-        '<div style="font-size:9px;opacity:0.6;text-transform:uppercase;letter-spacing:1px">pts/month</div>' +
-      '</div>' +
-    '</div>' +
-    '<div style="background:rgba(255,255,255,0.1);border-radius:8px;padding:8px 12px;font-size:12px;opacity:0.8">' +
-      'Director: ' + (dir?dir.name:'—') + ' · Attend an event within 30 days to stay Tier 1.' +
-    '</div>' +
-    '</div>' +
-    '<div class="qr-card">' +
-      '<div style="font-size:11px;color:rgba(26,58,107,0.45);letter-spacing:1px;text-transform:uppercase;margin-bottom:12px">Your Membership QR</div>' +
-      '<div class="qr-placeholder"><div style="font-size:36px">🪪</div><div style="font-size:9px;color:rgba(26,58,107,0.45);margin-top:4px">' + y.id + '</div></div>' +
-      '<div style="font-family:\'Noto Serif SC\',serif;font-weight:700;color:#1a3a6b;font-size:14px">' + y.name + '</div>' +
-      '<div style="font-size:11px;color:rgba(26,58,107,0.45);margin-top:2px">Show this at events for attendance check-in</div>' +
-    '</div>';
-
-  document.getElementById('youthHome').innerHTML = html;
-}
-
-function renderYouthEvents() {
-  var upcoming = STATE.events.filter(function(e){ return e.status==='approved' && new Date(e.date) >= new Date(); });
-  upcoming.sort(function(a,b){ return new Date(a.date)-new Date(b.date); });
-  var y = STATE.currentUser;
-  var html = sectionHead('Upcoming Events', upcoming.length, '#c0292b');
-
-  if (upcoming.length === 0) { html += '<div class="empty">No upcoming events.</div>'; }
-  upcoming.forEach(function(ev) {
-    var attended = Array.isArray(ev.attendees) && ev.attendees.includes(String(y.id));
-    html += '<div style="background:#fff;border:1px solid #dde4f0;border-radius:12px;padding:14px 16px;margin-bottom:10px;border-left:4px solid '+(attended?'#2e7d32':'#c0292b')+'">' +
-      '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:6px">' +
-        '<div class="approval-name">' + ev.name + '</div>' +
-        (attended ? badge('✓ Attended','#2e7d32') : '') +
-      '</div>' +
-      '<div class="approval-meta"><span>📅 '+fmtDate(ev.date)+'</span><span>📍 '+(ev.venue||'TBC')+'</span><span>👥 ~'+ev.estPax+' pax</span></div>' +
-      (ev.description ? '<div style="font-size:12px;color:rgba(26,58,107,0.45);margin-top:6px;line-height:1.5">'+ev.description+'</div>' : '') +
-      '</div>';
-  });
-  document.getElementById('youthEvents').innerHTML = html;
-}
-
-function renderYouthMyEvents() {
-  var mine = STATE.events.filter(function(e){ return String(e.submittedById)===String(STATE.currentUser.id); });
-  var html = sectionHead('My Submissions', mine.length, '#c0292b') +
-    '<div class="info-box">⏰ Events must be submitted at least <strong>3 months (12 weeks)</strong> before the event date.</div>';
-
+function renderYouthSubmissions(ca) {
+  const u = STATE.currentUser;
+  const mine = STATE.events.filter(e => e.submittedById === u.id);
+  const sc = {pending:'#b8960c',approved:'#2e7d32',rejected:'#c0292b'};
+  let html = `<div class="modal-info">⏰ Events must be submitted at least <strong>3 months (12 weeks)</strong> before event date.</div>`;
   if (mine.length === 0) { html += '<div class="empty">No submissions yet.</div>'; }
-  mine.forEach(function(ev) {
-    var sc = statusColor(ev.status);
-    html += '<div style="background:#fff;border:1px solid #dde4f0;border-radius:12px;padding:14px 16px;margin-bottom:10px;border-left:4px solid '+sc+'">' +
-      '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:6px">' +
-        '<div class="approval-name">' + ev.name + '</div>' + badge(ev.status, sc) +
-      '</div>' +
-      '<div class="approval-meta"><span>📅 '+fmtDate(ev.date)+'</span><span>👥 ~'+ev.estPax+' pax</span></div>' +
-      '</div>';
+  else mine.forEach(ev => {
+    html += `<div class="card" style="border-left:4px solid ${sc[ev.status]||'#aaa'}">
+      <div style="display:flex;justify-content:space-between;gap:8px;margin-bottom:6px">
+        <div style="font-family:var(--serif);font-weight:700;font-size:14px">${ev.name}</div>
+        <span class="badge" style="background:${sc[ev.status]||'#aaa'}18;color:${sc[ev.status]||'#aaa'}">${ev.status}</span>
+      </div>
+      <div style="font-size:11px;color:var(--muted);display:flex;gap:10px;flex-wrap:wrap">
+        <span>📅 ${fmtDate(ev.date)}</span><span>👥 ~${ev.estPax}</span>
+      </div>
+    </div>`;
   });
-  document.getElementById('youthMyEvents').innerHTML = html;
+  ca.innerHTML = html;
 }
 
-// ══════════════════════════════════════════════════════════════
-// SHARED FORM SUBMISSIONS
-// ══════════════════════════════════════════════════════════════
-function submitYouth() {
-  var name = document.getElementById('youthNameInput').value.trim();
-  var ig   = document.getElementById('youthIgInput').value.trim();
-  var wa   = document.getElementById('youthWaInput').value.trim();
-  if (!name || !ig || !wa) { document.getElementById('youthModalErr').textContent = 'All fields required.'; return; }
+// ── MODALS ────────────────────────────────────────────────
+function openModal(type, data) {
+  const overlay = el('modalOverlay');
+  const sheet   = el('modalSheet');
+  overlay.style.display = 'flex';
 
-  var data = {
-    name: name, instagram: ig, whatsapp: wa,
-    directorId: STATE.currentUser.role === 'director' ? STATE.currentUser.id : STATE.users.find(function(u){return u.role==='director';})?.id
-  };
+  if (type === 'addYouth')     sheet.innerHTML = buildAddYouthModal();
+  if (type === 'submitEvent')  sheet.innerHTML = buildSubmitEventModal();
+  if (type === 'reviewYouth')  sheet.innerHTML = buildReviewYouthModal(data);
+  if (type === 'reviewEvent')  sheet.innerHTML = buildReviewEventModal(data);
+  if (type === 'qrScanner')    sheet.innerHTML = buildQRScannerModal(data);
+}
+function closeModal() { el('modalOverlay').style.display = 'none'; }
+function openReviewYouth(id) { openModal('reviewYouth', STATE.pendingYouth.find(y=>y.id===id)); }
+function openReviewEvent(id) { openModal('reviewEvent', STATE.events.find(e=>e.id===id)); }
+function openQRScanner(id)   { openModal('qrScanner',   STATE.events.find(e=>e.id===id)); }
 
-  showLoading();
-  google.script.run
-    .withSuccessHandler(function(res) {
-      hideLoading();
-      if (!res.success) { document.getElementById('youthModalErr').textContent = res.error; return; }
-      STATE.youth.push({ id: res.id, directorId: data.directorId, name: data.name, instagram: data.instagram, whatsapp: data.whatsapp, status: 'pending', submittedDate: today(), lastActive: '', joinedDate: '' });
-      document.getElementById('youthNameInput').value = '';
-      document.getElementById('youthIgInput').value   = '';
-      document.getElementById('youthWaInput').value   = '';
-      closeModal('addYouthModal');
-      if (STATE.currentUser.role === 'admin')    renderAdmin();
-      if (STATE.currentUser.role === 'director') renderDirector();
-    })
-    .withFailureHandler(function(e){ hideLoading(); alert('Error: '+e.message); })
-    .submitYouth(data);
+function buildAddYouthModal() {
+  const dirs = STATE.users.filter(u => u.role === 'director');
+  const presel = STATE.currentUser.role === 'director' ? STATE.currentUser.id : dirs[0]?.id;
+  return `<div class="modal-title">Submit Youth for Onboarding</div>
+  <div class="modal-sub">Admin will verify before approving. Director earns +1 pt on approval.</div>
+  <div class="field"><label>Youth Full Name</label><input id="mYouthName" placeholder="Full name"></div>
+  <div class="field"><label>Instagram Handle</label><div style="position:relative"><span style="position:absolute;left:13px;top:50%;transform:translateY(-50%);opacity:.5">@</span><input id="mYouthIG" placeholder="username" style="padding-left:26px"></div></div>
+  <div class="field"><label>WhatsApp (with country code)</label><input id="mYouthWA" placeholder="6591234567"></div>
+  <div class="field"><label>Director</label><select id="mYouthDir">${dirs.map(d=>`<option value="${d.id}"${d.id===presel?' selected':''}>${d.name} · ${d.zh}</option>`).join('')}</select></div>
+  <div class="modal-btn-row" style="margin-top:16px">
+    <button class="modal-btn outline" style="border-color:var(--navy);color:var(--navy)" onclick="closeModal()">Cancel</button>
+    <button class="modal-btn" style="background:var(--navy);color:#fff" onclick="submitYouthForm()">Submit for Approval</button>
+  </div>`;
 }
 
-document.addEventListener('DOMContentLoaded', function() {
-  var dateInput = document.getElementById('evDateInput');
-  if (dateInput) {
-    dateInput.addEventListener('change', function() {
-      var wks = Math.floor(daysBetween(today(), this.value) / 7);
-      var warn = document.getElementById('evLeadWarn');
-      if (warn) warn.style.display = wks < 12 ? 'block' : 'none';
+function submitYouthForm() {
+  const name = el('mYouthName').value.trim(), ig = el('mYouthIG').value.trim(), wa = el('mYouthWA').value.trim();
+  const dirId = el('mYouthDir').value;
+  if (!name || !ig || !wa) return alert('Fill all fields.');
+  call('submitYouth', { name, instagram: ig, whatsapp: wa, directorId: dirId }, res => {
+    if (res.success) { closeModal(); loadAllData(); } else alert(res.message);
+  });
+}
+
+function buildSubmitEventModal() {
+  const dirs = STATE.users.filter(u => u.role === 'director');
+  const presel = STATE.currentUser.role === 'director' ? STATE.currentUser.id : STATE.currentUser.directorId || dirs[0]?.id;
+  const types = ['Cultural','Social','Education','Sports','Community Service','Other'];
+  const isYouth = STATE.currentUser.role === 'youth';
+  return `<div class="modal-title">Submit Event for Approval</div>
+  <div class="modal-sub">Admin approves · +10 pts to director on approval.${isYouth?' Must be ≥12 weeks away.':''}</div>
+  <div class="field"><label>Event Name</label><input id="mEvName" placeholder="e.g. Heritage Walk 2026"></div>
+  <div class="two-col">
+    <div class="field"><label>Type</label><select id="mEvType">${types.map(t=>`<option>${t}</option>`).join('')}</select></div>
+    <div class="field"><label>Event Date</label><input id="mEvDate" type="date"></div>
+  </div>
+  <div id="mEvDateWarn" style="display:none" class="modal-warn">⚠ Must be at least 12 weeks away.</div>
+  <div class="two-col">
+    <div class="field"><label>Est. Pax (min 15)</label><input id="mEvPax" type="number" placeholder="40"></div>
+    <div class="field"><label>Venue</label><input id="mEvVenue" placeholder="Location"></div>
+  </div>
+  <div class="field"><label>Youth Primary Organiser</label><input id="mEvOrg" placeholder="Youth's full name"></div>
+  <div class="field"><label>Director / Mentor</label><select id="mEvDir">${dirs.map(d=>`<option value="${d.id}"${d.id===presel?' selected':''}>${d.name}</option>`).join('')}</select></div>
+  <div class="field"><label>Description</label><textarea id="mEvDesc" rows="3" placeholder="Brief description..."></textarea></div>
+  <div class="modal-btn-row" style="margin-top:8px">
+    <button class="modal-btn outline" style="border-color:var(--navy);color:var(--navy)" onclick="closeModal()">Cancel</button>
+    <button class="modal-btn" style="background:var(--red);color:#fff" onclick="submitEventForm()">Submit for Approval</button>
+  </div>
+  <script>
+    document.getElementById('mEvDate').addEventListener('change', function() {
+      const w = Math.floor((new Date(this.value)-new Date())/604800000);
+      document.getElementById('mEvDateWarn').style.display = w < 12 ? 'block' : 'none';
     });
+  <\/script>`;
+}
+
+function submitEventForm() {
+  const name = el('mEvName').value.trim(), date = el('mEvDate').value, pax = el('mEvPax').value;
+  if (!name || !date || !pax) return alert('Fill required fields.');
+  const u = STATE.currentUser;
+  const isYouth = u.role === 'youth';
+  if (isYouth) {
+    const weeks = Math.floor((new Date(date)-new Date())/604800000);
+    if (weeks < 12) return alert('Event must be at least 12 weeks away.');
   }
-  document.getElementById('loginPass').addEventListener('keydown', function(e){ if(e.key==='Enter') doLogin(); });
-  document.getElementById('loginUser').addEventListener('keydown', function(e){ if(e.key==='Enter') document.getElementById('loginPass').focus(); });
-});
-
-function submitEvent() {
-  var name  = document.getElementById('evNameInput').value.trim();
-  var type  = document.getElementById('evTypeInput').value;
-  var date  = document.getElementById('evDateInput').value;
-  var pax   = document.getElementById('evPaxInput').value;
-  var venue = document.getElementById('evVenueInput').value.trim();
-  var org   = document.getElementById('evOrgInput').value.trim();
-  var desc  = document.getElementById('evDescInput').value.trim();
-
-  if (!name || !date || !pax) { document.getElementById('evModalErr').textContent = 'Name, date and pax required.'; return; }
-  var wks = Math.floor(daysBetween(today(), date) / 7);
-  if (STATE.currentUser.role === 'youth' && wks < 12) { document.getElementById('evModalErr').textContent = 'Event must be at least 12 weeks away.'; return; }
-
-  var data = {
-    name: name, type: type, date: date, estPax: Number(pax),
-    venue: venue, description: desc, youthOrganiser: org,
-    directorId: STATE.currentUser.role === 'director' ? STATE.currentUser.id : STATE.currentUser.directorId,
-    submittedById: STATE.currentUser.id,
-    submittedByRole: STATE.currentUser.role,
-  };
-
-  showLoading();
-  google.script.run
-    .withSuccessHandler(function(res) {
-      hideLoading();
-      if (!res.success) { document.getElementById('evModalErr').textContent = res.error; return; }
-      STATE.events.push(Object.assign({ id: res.id, status: 'pending', submittedDate: today(), attendees: [] }, data));
-      ['evNameInput','evDateInput','evPaxInput','evVenueInput','evOrgInput','evDescInput'].forEach(function(id){ document.getElementById(id).value = ''; });
-      closeModal('addEventModal');
-      if (STATE.currentUser.role === 'admin')    renderAdmin();
-      if (STATE.currentUser.role === 'director') renderDirector();
-      if (STATE.currentUser.role === 'youth')    renderYouth();
-    })
-    .withFailureHandler(function(e){ hideLoading(); alert('Error: '+e.message); })
-    .submitEvent(data);
+  const dirId = el('mEvDir').value;
+  call('submitEvent', {
+    name, type: el('mEvType').value, date, estPax: Number(pax),
+    venue: el('mEvVenue').value.trim(), description: el('mEvDesc').value.trim(),
+    youthOrganiser: el('mEvOrg').value.trim(), directorId: dirId,
+    submittedById: u.id, submittedByRole: u.role
+  }, res => {
+    if (res.success) { closeModal(); loadAllData(); } else alert(res.message);
+  });
 }
 
-// ── Small render helpers ─────────────────────────────────────
-function sectionHead(title, count, color) {
-  return '<div class="section-head">' +
-    '<div class="section-bar" style="background:'+color+'"></div>' +
-    '<div class="section-title">'+title+'</div>' +
-    (count !== null && count !== undefined ? '<div class="section-count" style="background:'+color+'">'+count+'</div>' : '') +
-    '</div>';
+function buildReviewYouthModal(y) {
+  if (!y) return '<div class="modal-title">Not found</div>';
+  const dir = STATE.users.find(d => d.id === y.directorId);
+  return `<div class="modal-title">Review Youth Onboarding</div>
+  <div class="modal-sub">Open profiles → add to both groups → then approve.</div>
+  <div style="background:var(--cream);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:16px">
+    <div style="font-family:var(--serif);font-weight:700;font-size:16px;margin-bottom:4px">${y.name}</div>
+    <div style="font-size:12px;color:var(--muted)">Submitted by: <strong>${dir?.name||'?'}</strong></div>
+  </div>
+  <a href="https://wa.me/${y.whatsapp}" target="_blank" class="modal-link" style="background:#e8f5e9;border-color:#2e7d32">
+    <span class="modal-link-icon">💬</span>
+    <div><div class="modal-link-title" style="color:#2e7d32">Open WhatsApp</div><div class="modal-link-sub">+${y.whatsapp} · add to clan WhatsApp group</div></div>
+    <span class="modal-link-arrow" style="color:#2e7d32">↗</span>
+  </a>
+  <a href="https://instagram.com/${y.instagram}" target="_blank" class="modal-link" style="background:#fce4ec;border-color:#c0292b">
+    <span class="modal-link-icon">📸</span>
+    <div><div class="modal-link-title" style="color:#c0292b">Open Instagram</div><div class="modal-link-sub">@${y.instagram} · follow &amp; add to clan IG group</div></div>
+    <span class="modal-link-arrow" style="color:#c0292b">↗</span>
+  </a>
+  <div class="modal-info" style="margin-top:10px">✓ Confirm youth has joined <strong>both</strong> WhatsApp and Instagram before approving.</div>
+  <div class="modal-btn-row">
+    <button class="modal-btn outline" style="border-color:var(--red);color:var(--red)" onclick="rejectYouthAction('${y.id}')">✕ Reject</button>
+    <button class="modal-btn" style="background:#2e7d32;color:#fff" onclick="approveYouthAction('${y.id}','${y.directorId}')">✓ Approve · +1 pt</button>
+  </div>`;
 }
-function eventCell(label, val) {
-  return '<div class="event-cell"><div class="event-cell-label">'+label+'</div><div class="event-cell-val">'+val+'</div></div>';
+
+function approveYouthAction(id, dirId) {
+  call('approveYouth', { id, directorId: dirId }, res => {
+    if (res.success) { closeModal(); loadAllData(); } else alert(res.message);
+  });
 }
-function detailCell(label, val, full) {
-  return '<div class="detail-cell'+(full?' full':'')+'"><div class="detail-label">'+label+'</div><div class="detail-val">'+val+'</div></div>';
+function rejectYouthAction(id) {
+  call('rejectYouth', { id }, res => {
+    if (res.success) { closeModal(); loadAllData(); } else alert(res.message);
+  });
+}
+
+function buildReviewEventModal(ev) {
+  if (!ev) return '<div class="modal-title">Not found</div>';
+  const dir = STATE.users.find(d => d.id === ev.directorId);
+  const weeks = ev.date ? Math.floor(daysBetween(today(), ev.date)/7) : 0;
+  const tooSoon = weeks < 12, lowPax = ev.estPax < 15;
+  const tc = TYPE_COLORS[ev.type]||'#555';
+  return `<div class="modal-title">Review Event Submission</div>
+  <div class="modal-sub">Verify all details before awarding +10 pts.</div>
+  <div class="modal-grid">
+    <div class="modal-cell" style="grid-column:1/-1"><div class="modal-cell-label">Event Name</div><div class="modal-cell-val">${ev.name}</div></div>
+    <div class="modal-cell"><div class="modal-cell-label">Type</div><div class="modal-cell-val"><span class="badge" style="background:${tc}18;color:${tc}">${ev.type}</span></div></div>
+    <div class="modal-cell"><div class="modal-cell-label">Date</div><div class="modal-cell-val">${fmtDate(ev.date)}</div></div>
+    <div class="modal-cell"><div class="modal-cell-label">Weeks Away</div><div class="modal-cell-val" style="color:${tooSoon?'#c0292b':'#2e7d32'};font-weight:700">${weeks} wks ${tooSoon?'⚠ too soon':''}</div></div>
+    <div class="modal-cell"><div class="modal-cell-label">Est. Pax</div><div class="modal-cell-val">${ev.estPax} pax</div></div>
+    <div class="modal-cell"><div class="modal-cell-label">Venue</div><div class="modal-cell-val">${ev.venue||'—'}</div></div>
+    <div class="modal-cell"><div class="modal-cell-label">Youth Organiser</div><div class="modal-cell-val">${ev.youthOrganiser||'—'}</div></div>
+    <div class="modal-cell"><div class="modal-cell-label">Director</div><div class="modal-cell-val">${dir?.name||'—'}</div></div>
+  </div>
+  ${ev.description?`<div style="background:var(--cream);border-radius:9px;padding:9px 12px;margin-bottom:14px;font-size:13px;line-height:1.5">${ev.description}</div>`:''}
+  ${tooSoon?`<div class="modal-warn">⚠ Less than 12 weeks away. Policy requires 3-month advance notice.</div>`:''}
+  ${lowPax?`<div class="modal-warn">⚠ Est. attendance below required 15 pax minimum.</div>`:''}
+  <div class="modal-btn-row">
+    <button class="modal-btn outline" style="border-color:var(--red);color:var(--red)" onclick="rejectEventAction('${ev.id}')">✕ Reject</button>
+    <button class="modal-btn" style="background:#2e7d32;color:#fff" onclick="approveEventAction('${ev.id}')">✓ Approve · +10 pts</button>
+  </div>`;
+}
+
+function approveEventAction(id) {
+  call('approveEvent', { id }, res => {
+    if (res.success) { closeModal(); loadAllData(); } else alert(res.message);
+  });
+}
+function rejectEventAction(id) {
+  call('rejectEvent', { id }, res => {
+    if (res.success) { closeModal(); loadAllData(); } else alert(res.message);
+  });
+}
+
+function buildQRScannerModal(ev) {
+  if (!ev) return '<div class="modal-title">Event not found</div>';
+  const eligible = STATE.users.filter(u => u.role==='youth' && u.status==='approved' && !ev.attendees.includes(u.id));
+  const checked  = ev.attendees.map(aid => STATE.users.find(u=>u.id===aid)).filter(Boolean);
+
+  return `<div class="modal-title">📷 Attendance · ${ev.name}</div>
+  <div class="modal-sub">${fmtDate(ev.date)} · ${ev.attendees.length} checked in</div>
+  <div class="qr-viewport">
+    <div class="qr-grid"></div>
+    <div class="qr-corner qr-tl"></div><div class="qr-corner qr-tr"></div>
+    <div class="qr-corner qr-bl"></div><div class="qr-corner qr-br"></div>
+    <div style="text-align:center;z-index:1">
+      <div style="font-size:34px;margin-bottom:8px">📷</div>
+      <div style="color:rgba(255,255,255,.5);font-size:12px">Point camera at member QR<br><span style="opacity:.4">(demo: use buttons below)</span></div>
+    </div>
+  </div>
+  <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.7px;margin-bottom:8px">Simulate scan</div>
+  <div class="qr-sim-list">
+    ${eligible.length===0?'<div style="text-align:center;color:var(--muted);font-size:13px;padding:16px">All eligible youth checked in</div>':
+    eligible.map(u=>`<button class="qr-sim-btn" onclick="scanAttendance('${ev.id}','${u.id}')">
+      <span style="font-size:18px">🪪</span>
+      <div><div style="font-family:var(--serif);font-weight:700;color:var(--navy);font-size:13px">${u.name}</div>
+      <div style="font-size:11px;color:var(--muted)">${u.zh||''}</div></div>
+    </button>`).join('')}
+  </div>
+  ${checked.length>0?`<div style="font-size:11px;color:#2e7d32;text-transform:uppercase;letter-spacing:.7px;margin-bottom:6px">✓ Checked in (${checked.length})</div>
+  <div class="checked-in-list">${checked.map(u=>`<div class="chip" style="background:#2e7d3214;border-color:#2e7d3230;color:#2e7d32">${u.name}</div>`).join('')}</div>`:''}`;
+}
+
+function scanAttendance(eventId, userId) {
+  call('logAttendance', { eventId, userId }, res => {
+    if (res.success) {
+      // Update local state
+      const ev = STATE.events.find(e => e.id === eventId);
+      if (ev && !ev.attendees.includes(userId)) ev.attendees.push(userId);
+      const u = STATE.users.find(x => x.id === userId);
+      if (u) u.lastActive = today();
+      // Re-render scanner
+      el('modalSheet').innerHTML = buildQRScannerModal(STATE.events.find(e => e.id === eventId));
+      // Update stats
+      renderApp();
+    } else alert(res.message);
+  });
 }
 </script>
