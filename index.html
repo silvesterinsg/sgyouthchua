@@ -1,0 +1,1048 @@
+import { useState, useEffect, useRef } from "react";
+
+// ─── Palette ──────────────────────────────────────────────────────────────────
+const C = {
+  navy:"#1a3a6b", red:"#c0292b", green:"#2e7d32",
+  gold:"#b8960c", cream:"#fdf8f0", bg:"#f0f4fb",
+  white:"#ffffff", border:"#dde4f0",
+  muted:"rgba(26,58,107,0.45)", text:"#1a3a6b",
+};
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+const today = () => new Date().toISOString().split("T")[0];
+const daysBetween = (d1, d2) => {
+  const ms = new Date(d2) - new Date(d1);
+  return Math.floor(ms / 86400000);
+};
+const getTier = (lastActive) => {
+  if (!lastActive) return 3;
+  const days = daysBetween(lastActive, today());
+  if (days <= 30)  return 1;
+  if (days <= 60)  return 2;
+  return 3;
+};
+const tierPts  = t => t === 1 ? 3 : t === 2 ? 2 : 0;
+const tierLabel = t => t === 1 ? "Tier 1 · Active" : t === 2 ? "Tier 2 · Fading" : "Tier 3 · Inactive";
+const tierColor = t => t === 1 ? C.green : t === 2 ? C.gold : "#aaa";
+const fmtDate  = d => d ? new Date(d).toLocaleDateString("en-SG",{day:"numeric",month:"short",year:"numeric"}) : "—";
+const TYPE_COLORS = {Cultural:C.navy,Social:C.green,Education:"#7b1fa2",Sports:"#e65100","Community Service":C.gold,Other:"#555"};
+
+// ─── Seed data ────────────────────────────────────────────────────────────────
+const INIT_USERS = [
+  { id:"admin1",  role:"admin",    name:"Cai Wen Hao (Admin)", zh:"蔡文豪",   password:"admin123" },
+  { id:"dir1",    role:"director", name:"Cai Wei Ming",         zh:"蔡威明",   password:"dir1",   color:"#1a3a6b", avatar:"WM" },
+  { id:"dir2",    role:"director", name:"Cai Li Fen",           zh:"蔡丽芬",   password:"dir2",   color:"#c0292b", avatar:"LF" },
+  { id:"dir3",    role:"director", name:"Cai Jun Hao",          zh:"蔡俊豪",   password:"dir3",   color:"#2e7d32", avatar:"JH" },
+  { id:"dir4",    role:"director", name:"Cai Mei Ling",         zh:"蔡美玲",   password:"dir4",   color:"#7b1fa2", avatar:"ML" },
+  { id:"y1",      role:"youth",    name:"Cai Bao Zhen",         zh:"蔡宝珍",   password:"y1",     directorId:"dir1", lastActive:"2026-04-25", joinedDate:"2026-01-10", status:"approved" },
+  { id:"y2",      role:"youth",    name:"Tan Hui Shan",         zh:"陈慧珊",   password:"y2",     directorId:"dir2", lastActive:"2026-03-10", joinedDate:"2026-02-01", status:"approved" },
+  { id:"y3",      role:"youth",    name:"Lim Wei Jie",          zh:"林伟杰",   password:"y3",     directorId:"dir3", lastActive:"2026-02-01", joinedDate:"2026-01-20", status:"approved" },
+];
+
+const INIT_PENDING_YOUTH = [
+  { id:"py1", directorId:"dir1", name:"Cai Xiao Ming", instagram:"xiaoming_cai", whatsapp:"6591234567", status:"pending", submittedDate: today() },
+  { id:"py2", directorId:"dir2", name:"Lim Ah Kow",    instagram:"ahkow.lim",    whatsapp:"6598765432", status:"pending", submittedDate: today() },
+];
+
+const INIT_EVENTS = [
+  { id:"e1", directorId:"dir1", submittedById:"y1", submittedByRole:"youth",
+    name:"Qingming Heritage Walk", type:"Cultural", date:"2026-08-14",
+    estPax:40, venue:"Bukit Brown Cemetery",
+    description:"Youth-led guided walk through ancestral burial grounds.",
+    youthOrganiser:"Cai Bao Zhen", status:"pending", submittedDate:"2026-05-04",
+    attendees:[] },
+  { id:"e2", directorId:"dir3", submittedById:"y3", submittedByRole:"youth",
+    name:"Clan Day Games 2026", type:"Social", date:"2026-08-05",
+    estPax:80, venue:"Bishan CC Hall",
+    description:"Inter-family games and bonding session.",
+    youthOrganiser:"Lim Wei Jie", status:"approved", submittedDate:"2026-05-01",
+    attendees:["y1","y3"] },
+  { id:"e3", directorId:"dir2", submittedById:"dir2", submittedByRole:"director",
+    name:"Mandarin Workshop", type:"Education", date:"2026-09-25",
+    estPax:25, venue:"Clan Meeting Room",
+    description:"Conversational Mandarin for youths.",
+    youthOrganiser:"Tan Hui Shan", status:"approved", submittedDate:"2026-04-20",
+    attendees:["y2"] },
+];
+
+// ─── Score calculator ─────────────────────────────────────────────────────────
+function calcScore(dirId, users, events) {
+  const myYouth = users.filter(u => u.role==="youth" && u.directorId===dirId && u.status==="approved");
+  const onboarded = myYouth.length;
+  // Engagement: sum of monthly tier pts for each youth
+  const engagementPts = myYouth.reduce((sum, y) => sum + tierPts(getTier(y.lastActive)), 0);
+  const approvedEvents = events.filter(e => e.directorId===dirId && e.status==="approved").length;
+  const eventPts = approvedEvents * 10;
+  return { onboarded, onboardedPts: onboarded, engagementPts, approvedEvents, eventPts,
+    total: onboarded + engagementPts + eventPts };
+}
+
+// ─── Shared UI ────────────────────────────────────────────────────────────────
+function Badge({ label, color }) {
+  return <span style={{display:"inline-flex",alignItems:"center",padding:"3px 10px",borderRadius:20,
+    background:color+"18",color,fontSize:11,fontFamily:"Georgia,serif",fontWeight:700,
+    letterSpacing:0.5,textTransform:"uppercase",whiteSpace:"nowrap"}}>{label}</span>;
+}
+function Avatar({ initials, color, size=40 }) {
+  return <div style={{width:size,height:size,borderRadius:"50%",
+    background:`linear-gradient(135deg,${color},${color}bb)`,display:"flex",alignItems:"center",
+    justifyContent:"center",color:C.white,fontFamily:"'Noto Serif SC',serif",fontWeight:700,
+    fontSize:size*0.3,flexShrink:0,boxShadow:`0 2px 8px ${color}44`}}>{initials}</div>;
+}
+function StatPill({ icon, label, value, color }) {
+  return <div style={{background:C.white,border:`1px solid ${color}28`,borderRadius:12,padding:"12px 14px",flex:1}}>
+    <div style={{fontSize:20,lineHeight:1,marginBottom:4}}>{icon}</div>
+    <div style={{fontSize:22,fontFamily:"'Noto Serif SC',serif",fontWeight:900,color,lineHeight:1}}>{value}</div>
+    <div style={{fontSize:10,color:C.muted,letterSpacing:0.8,textTransform:"uppercase",marginTop:3}}>{label}</div>
+  </div>;
+}
+function SectionHead({ title, count, color }) {
+  return <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
+    <div style={{width:4,height:20,borderRadius:2,background:color}}/>
+    <div style={{fontFamily:"'Noto Serif SC',serif",fontWeight:700,color:C.navy,fontSize:15,flex:1}}>{title}</div>
+    {count!==undefined && <div style={{background:color,color:C.white,borderRadius:20,
+      padding:"2px 10px",fontSize:12,fontFamily:"Georgia,serif",fontWeight:700}}>{count}</div>}
+  </div>;
+}
+function ScoreBar({ label, pts, max, color, detail }) {
+  return <div style={{marginBottom:8}}>
+    <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+      <span style={{fontSize:11,color:C.muted}}>{label}</span>
+      <span style={{fontSize:11,color,fontWeight:700,fontFamily:"Georgia,serif"}}>{detail}</span>
+    </div>
+    <div style={{height:5,background:"#eef1f8",borderRadius:3,overflow:"hidden"}}>
+      <div style={{height:"100%",width:`${Math.min(100,max>0?(pts/max)*100:0)}%`,
+        background:color,borderRadius:3,transition:"width 0.7s ease"}}/>
+    </div>
+  </div>;
+}
+
+// ─── Modal shell ──────────────────────────────────────────────────────────────
+function Modal({ onClose, children }) {
+  return <div style={{position:"fixed",inset:0,background:"rgba(10,20,40,0.55)",
+    display:"flex",alignItems:"flex-end",justifyContent:"center",zIndex:300}} onClick={onClose}>
+    <div style={{background:C.white,borderRadius:"20px 20px 0 0",padding:"24px 20px 44px",
+      width:"100%",maxWidth:600,boxShadow:"0 -8px 40px rgba(0,0,0,0.2)",
+      maxHeight:"92vh",overflowY:"auto"}} onClick={e=>e.stopPropagation()}>
+      {children}
+    </div>
+  </div>;
+}
+function MTitle({ title, sub }) {
+  return <div style={{marginBottom:18}}>
+    <div style={{fontFamily:"'Noto Serif SC',serif",fontWeight:700,fontSize:18,color:C.navy}}>{title}</div>
+    {sub && <div style={{fontSize:12,color:C.muted,marginTop:3,fontFamily:"Georgia,serif"}}>{sub}</div>}
+  </div>;
+}
+const inputStyle = {display:"block",width:"100%",boxSizing:"border-box",
+  border:`1px solid ${C.border}`,borderRadius:9,padding:"10px 13px",
+  fontFamily:"Georgia,serif",fontSize:13,color:C.navy,background:C.cream,outline:"none"};
+function Field({ label, children }) {
+  return <div style={{marginBottom:13}}>
+    <label style={{fontSize:11,letterSpacing:0.8,textTransform:"uppercase",color:C.muted,
+      fontFamily:"Georgia,serif",display:"block",marginBottom:5}}>{label}</label>
+    {children}
+  </div>;
+}
+function Input({ value, onChange, placeholder, type="text" }) {
+  return <input type={type} value={value} onChange={e=>onChange(e.target.value)}
+    placeholder={placeholder} style={inputStyle}/>;
+}
+function Sel({ value, onChange, options }) {
+  return <select value={value} onChange={e=>onChange(e.target.value)}
+    style={{...inputStyle,cursor:"pointer"}}>
+    {options.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
+  </select>;
+}
+function Btn({ label, color, onClick, outline, disabled, full }) {
+  return <button onClick={onClick} disabled={disabled} style={{
+    flex:full?undefined:1, width:full?"100%":undefined,
+    padding:"13px 0",borderRadius:12,
+    border:outline?`1.5px solid ${color}`:"none",
+    background:disabled?"#ccc":outline?"transparent":color,
+    color:outline?color:C.white,
+    fontFamily:"'Noto Serif SC',serif",fontWeight:700,fontSize:13,
+    cursor:disabled?"not-allowed":"pointer",display:"block",
+  }}>{label}</button>;
+}
+
+// ─── QR Scanner (simulated — real device would use camera API) ────────────────
+function QRScanner({ event, users, onScan, onClose }) {
+  const [scanning, setScanning] = useState(false);
+  const [result, setResult]     = useState(null);
+
+  const eligibleYouth = users.filter(u =>
+    u.role==="youth" && u.status==="approved" && !event.attendees.includes(u.id)
+  );
+
+  const simulateScan = (userId) => {
+    setScanning(true);
+    setTimeout(() => {
+      const user = users.find(u=>u.id===userId);
+      setResult(user);
+      setScanning(false);
+    }, 800);
+  };
+
+  const confirmAttendance = () => {
+    if (result) { onScan(event.id, result.id); setResult(null); }
+  };
+
+  return <Modal onClose={onClose}>
+    <MTitle title={`📷 Attendance · ${event.name}`} sub={`${event.date} · ${event.attendees.length} checked in`}/>
+
+    {/* Simulated QR viewport */}
+    <div style={{background:"#111",borderRadius:16,overflow:"hidden",marginBottom:16,
+      aspectRatio:"4/3",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
+      position:"relative"}}>
+      <div style={{position:"absolute",inset:0,opacity:0.15,
+        backgroundImage:"repeating-linear-gradient(0deg,transparent,transparent 20px,rgba(255,255,255,0.1) 20px,rgba(255,255,255,0.1) 21px),repeating-linear-gradient(90deg,transparent,transparent 20px,rgba(255,255,255,0.1) 20px,rgba(255,255,255,0.1) 21px)"}}/>
+      {/* Corner brackets */}
+      {[[0,0],[0,1],[1,0],[1,1]].map(([r,c],i)=>(
+        <div key={i} style={{position:"absolute",
+          top:r===0?24:"auto",bottom:r===1?24:"auto",
+          left:c===0?24:"auto",right:c===1?24:"auto",
+          width:32,height:32,
+          borderTop:r===0?`3px solid #4ade80`:"none",
+          borderBottom:r===1?`3px solid #4ade80`:"none",
+          borderLeft:c===0?`3px solid #4ade80`:"none",
+          borderRight:c===1?`3px solid #4ade80`:"none",
+        }}/>
+      ))}
+      {scanning ? (
+        <div style={{color:"#4ade80",fontFamily:"Georgia,serif",fontSize:13,animation:"pulse 1s infinite"}}>Scanning…</div>
+      ) : result ? (
+        <div style={{textAlign:"center",padding:20}}>
+          <div style={{fontSize:40,marginBottom:8}}>✅</div>
+          <div style={{color:C.white,fontFamily:"'Noto Serif SC',serif",fontWeight:700,fontSize:16}}>{result.name}</div>
+          <div style={{color:"rgba(255,255,255,0.5)",fontSize:12,fontFamily:"Georgia,serif"}}>{result.zh}</div>
+        </div>
+      ) : (
+        <div style={{textAlign:"center"}}>
+          <div style={{fontSize:36,marginBottom:8}}>📷</div>
+          <div style={{color:"rgba(255,255,255,0.5)",fontSize:12,fontFamily:"Georgia,serif"}}>Point camera at member QR code</div>
+        </div>
+      )}
+    </div>
+
+    {result ? (
+      <div style={{display:"flex",gap:10}}>
+        <Btn label="Cancel" color={C.navy} outline onClick={()=>setResult(null)}/>
+        <Btn label={`✓ Confirm · ${result.name}`} color={C.green} onClick={confirmAttendance}/>
+      </div>
+    ) : (
+      <>
+        <div style={{fontSize:11,color:C.muted,fontFamily:"Georgia,serif",marginBottom:10,textTransform:"uppercase",letterSpacing:0.7}}>
+          Simulate scan (demo)
+        </div>
+        <div style={{display:"flex",flexDirection:"column",gap:8,maxHeight:200,overflowY:"auto"}}>
+          {eligibleYouth.length===0 ? (
+            <div style={{textAlign:"center",color:C.muted,fontSize:13,padding:"16px 0",fontFamily:"Georgia,serif"}}>All eligible youth already checked in</div>
+          ) : eligibleYouth.map(u=>(
+            <button key={u.id} onClick={()=>simulateScan(u.id)} style={{
+              background:C.cream,border:`1px solid ${C.border}`,borderRadius:10,
+              padding:"11px 14px",display:"flex",alignItems:"center",gap:10,
+              cursor:"pointer",textAlign:"left",
+            }}>
+              <div style={{fontSize:18}}>🪪</div>
+              <div>
+                <div style={{fontFamily:"'Noto Serif SC',serif",fontWeight:700,color:C.navy,fontSize:13}}>{u.name}</div>
+                <div style={{fontSize:11,color:C.muted,fontFamily:"Georgia,serif"}}>{u.zh}</div>
+              </div>
+            </button>
+          ))}
+        </div>
+
+        {/* Already checked in */}
+        {event.attendees.length>0 && (
+          <div style={{marginTop:14}}>
+            <div style={{fontSize:11,color:C.green,fontFamily:"Georgia,serif",marginBottom:8,textTransform:"uppercase",letterSpacing:0.7}}>
+              ✓ Checked in ({event.attendees.length})
+            </div>
+            <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+              {event.attendees.map(aid=>{
+                const u=users.find(x=>x.id===aid);
+                return u ? <div key={aid} style={{background:C.green+"14",border:`1px solid ${C.green}30`,
+                  borderRadius:20,padding:"3px 10px",fontSize:11,color:C.green,fontFamily:"Georgia,serif"}}>{u.name}</div> : null;
+              })}
+            </div>
+          </div>
+        )}
+      </>
+    )}
+  </Modal>;
+}
+
+// ─── Login screen ─────────────────────────────────────────────────────────────
+function LoginScreen({ users, onLogin }) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError]       = useState("");
+  const [role, setRole]         = useState("admin");
+
+  const handleLogin = () => {
+    const user = users.find(u => u.role===role && u.password===password &&
+      (u.name.toLowerCase().includes(username.toLowerCase()) || username===""));
+    if (user) { onLogin(user); }
+    else { setError("Invalid credentials. Try again."); }
+  };
+
+  const DEMO = [
+    { role:"admin",    label:"Admin",    hint:"admin123",       color:C.red },
+    { role:"director", label:"Director", hint:"dir1 / dir2…",   color:C.navy },
+    { role:"youth",    label:"Youth",    hint:"y1 / y2 / y3",   color:C.green },
+  ];
+
+  return <div style={{minHeight:"100vh",background:`linear-gradient(160deg,${C.navy} 0%,#2a5298 50%,#1a3a6b 100%)`,
+    display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:20}}>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;700;900&display=swap" rel="stylesheet"/>
+
+    {/* Crest */}
+    <div style={{marginBottom:24,textAlign:"center"}}>
+      <div style={{width:72,height:72,borderRadius:"50%",background:C.white,
+        display:"flex",alignItems:"center",justifyContent:"center",fontSize:34,
+        margin:"0 auto 12px",boxShadow:"0 4px 20px rgba(0,0,0,0.3)"}}>❤️</div>
+      <div style={{fontFamily:"'Noto Serif SC',serif",fontWeight:900,color:C.white,fontSize:20,letterSpacing:1}}>新加坡济阳蔡氏公会</div>
+      <div style={{fontSize:11,color:"rgba(255,255,255,0.5)",letterSpacing:2,textTransform:"uppercase",marginTop:4}}>Youth Programme</div>
+    </div>
+
+    <div style={{background:C.white,borderRadius:20,padding:"28px 24px",width:"100%",maxWidth:380,
+      boxShadow:"0 20px 60px rgba(0,0,0,0.3)"}}>
+
+      {/* Role selector */}
+      <div style={{display:"flex",gap:6,marginBottom:20,background:C.bg,borderRadius:12,padding:4}}>
+        {DEMO.map(d=>(
+          <button key={d.role} onClick={()=>{setRole(d.role);setError("");}} style={{
+            flex:1,padding:"9px 0",borderRadius:9,border:"none",
+            background:role===d.role?d.color:"transparent",
+            color:role===d.role?C.white:C.muted,
+            fontFamily:"'Noto Serif SC',serif",fontWeight:700,fontSize:12,cursor:"pointer",
+            transition:"all 0.2s",
+          }}>{d.label}</button>
+        ))}
+      </div>
+
+      <Field label="Name (or leave blank)">
+        <Input value={username} onChange={setUsername} placeholder="Your name"/>
+      </Field>
+      <Field label="Password">
+        <Input type="password" value={password} onChange={setPassword} placeholder="••••••"/>
+      </Field>
+
+      {error && <div style={{fontSize:12,color:C.red,fontFamily:"Georgia,serif",marginBottom:12}}>{error}</div>}
+
+      <Btn label="Sign In" color={C.navy} full onClick={handleLogin} disabled={!password}/>
+
+      {/* Demo hints */}
+      <div style={{marginTop:16,background:C.cream,borderRadius:10,padding:"10px 12px"}}>
+        <div style={{fontSize:10,color:C.muted,textTransform:"uppercase",letterSpacing:0.7,marginBottom:6}}>Demo passwords</div>
+        {DEMO.map(d=>(
+          <div key={d.role} style={{fontSize:11,fontFamily:"Georgia,serif",color:C.text,marginBottom:2}}>
+            <span style={{color:d.color,fontWeight:700}}>{d.label}:</span> {d.hint}
+          </div>
+        ))}
+      </div>
+    </div>
+  </div>;
+}
+
+// ─── ADMIN VIEW ───────────────────────────────────────────────────────────────
+function AdminView({ currentUser, users, setUsers, events, setEvents, onLogout }) {
+  const [tab, setTab]         = useState("leaderboard");
+  const [modal, setModal]     = useState(null);
+  const [rvYouth, setRvYouth] = useState(null);
+  const [rvEvent, setRvEvent] = useState(null);
+  const [qrEvent, setQrEvent] = useState(null);
+
+  const directors    = users.filter(u=>u.role==="director");
+  const allYouth     = users.filter(u=>u.role==="youth");
+  const pendingYouth = users.filter(u=>u.role==="youth"&&u.status==="pending");
+  const pendingEvents= events.filter(e=>e.status==="pending");
+  const totalPending = pendingYouth.length + pendingEvents.length;
+
+  const sorted = [...directors].sort((a,b)=>calcScore(b.id,users,events).total-calcScore(a.id,users,events).total);
+
+  const approveYouth = id => setUsers(p=>p.map(u=>u.id===id?{...u,status:"approved",joinedDate:today()}:u));
+  const rejectYouth  = id => setUsers(p=>p.map(u=>u.id===id?{...u,status:"rejected"}:u));
+  const approveEvent = id => setEvents(p=>p.map(e=>e.id===id?{...e,status:"approved"}:e));
+  const rejectEvent  = id => setEvents(p=>p.map(e=>e.id===id?{...e,status:"rejected"}:e));
+
+  const handleScan = (eventId, userId) => {
+    setEvents(p=>p.map(e=>e.id===eventId?{...e,attendees:[...e.attendees,userId]}:e));
+    setUsers(p=>p.map(u=>u.id===userId?{...u,lastActive:today()}:u));
+  };
+
+  const TABS = [
+    {id:"leaderboard",label:"Leaderboard"},
+    {id:"approvals",  label:`Approvals${totalPending>0?` (${totalPending})`:""}`},
+    {id:"events",     label:"Events"},
+    {id:"members",    label:"Members"},
+  ];
+
+  return <div style={{minHeight:"100vh",background:C.bg,fontFamily:"Georgia,serif"}}>
+    <link href="https://fonts.googleapis.com/css2?family=Noto Serif+SC:wght@400;700;900&display=swap" rel="stylesheet"/>
+
+    {/* Header */}
+    <div style={{background:C.navy,padding:"0 16px",position:"sticky",top:0,zIndex:100,boxShadow:"0 2px 16px rgba(26,58,107,0.35)"}}>
+      <div style={{maxWidth:640,margin:"0 auto",padding:"13px 0",display:"flex",alignItems:"center",gap:12}}>
+        <div style={{width:38,height:38,borderRadius:"50%",background:C.white,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0}}>❤️</div>
+        <div style={{flex:1}}>
+          <div style={{fontFamily:"'Noto Serif SC',serif",fontWeight:900,color:C.white,fontSize:13}}>新加坡济阳蔡氏公会</div>
+          <div style={{fontSize:10,color:"rgba(255,255,255,0.5)",letterSpacing:1,textTransform:"uppercase"}}>Admin · {currentUser.name}</div>
+        </div>
+        {totalPending>0 && <div style={{background:C.red,color:C.white,borderRadius:20,padding:"4px 12px",fontSize:12,fontFamily:"'Noto Serif SC',serif",fontWeight:700}}>{totalPending} pending</div>}
+        <button onClick={onLogout} style={{background:"rgba(255,255,255,0.15)",border:"none",color:C.white,borderRadius:8,padding:"6px 12px",fontSize:11,cursor:"pointer",fontFamily:"Georgia,serif"}}>Sign out</button>
+      </div>
+    </div>
+
+    {/* Tab bar */}
+    <div style={{background:C.white,borderBottom:`1px solid ${C.border}`,padding:"0 16px",position:"sticky",top:64,zIndex:99}}>
+      <div style={{maxWidth:640,margin:"0 auto",display:"flex",overflowX:"auto"}}>
+        {TABS.map(t=><button key={t.id} onClick={()=>setTab(t.id)} style={{
+          padding:"12px 14px",border:"none",background:"transparent",whiteSpace:"nowrap",
+          color:tab===t.id?C.navy:C.muted,fontFamily:"'Noto Serif SC',serif",
+          fontWeight:tab===t.id?700:400,fontSize:12,cursor:"pointer",
+          borderBottom:tab===t.id?`2.5px solid ${C.navy}`:"2.5px solid transparent",
+        }}>{t.label}</button>)}
+      </div>
+    </div>
+
+    {/* Global stat pills */}
+    <div style={{background:C.white,borderBottom:`1px solid ${C.border}`,padding:"12px 16px"}}>
+      <div style={{maxWidth:640,margin:"0 auto",display:"flex",gap:10}}>
+        <StatPill icon="👥" label="Active Youth" value={allYouth.filter(u=>u.status==="approved").length} color={C.navy}/>
+        <StatPill icon="📅" label="Events Done" value={events.filter(e=>e.status==="approved").length} color={C.red}/>
+        <StatPill icon="⏳" label="Pending" value={totalPending} color={C.gold}/>
+      </div>
+    </div>
+
+    <div style={{maxWidth:640,margin:"0 auto",padding:"20px 16px 100px"}}>
+
+      {/* ── LEADERBOARD ── */}
+      {tab==="leaderboard" && <>
+        {/* Scoring key */}
+        <div style={{background:C.white,border:`1px solid ${C.border}`,borderRadius:12,padding:"12px 16px",marginBottom:16}}>
+          <div style={{fontSize:10,color:C.muted,textTransform:"uppercase",letterSpacing:0.7,marginBottom:8}}>Scoring Formula</div>
+          <div style={{display:"flex",flexDirection:"column",gap:5}}>
+            {[
+              {dot:C.navy,  text:"Onboarding: +1 pt per approved youth"},
+              {dot:C.green, text:"Engagement Tier 1 (≤30d active): +3 pts/month"},
+              {dot:C.gold,  text:"Engagement Tier 2 (31–60d): +2 pts/month"},
+              {dot:"#bbb",  text:"Engagement Tier 3 (>60d): +0 pts/month"},
+              {dot:C.red,   text:"Youth-led event approved: +10 pts each"},
+            ].map((k,i)=><div key={i} style={{display:"flex",alignItems:"center",gap:8}}>
+              <div style={{width:8,height:8,borderRadius:"50%",background:k.dot,flexShrink:0}}/>
+              <span style={{fontSize:12,color:C.text,fontFamily:"Georgia,serif"}}>{k.text}</span>
+            </div>)}
+          </div>
+        </div>
+
+        {sorted.map((dir,idx)=>{
+          const s=calcScore(dir.id,users,events);
+          const medals=["🥇","🥈","🥉"];
+          const myYouth=users.filter(u=>u.role==="youth"&&u.directorId===dir.id&&u.status==="approved");
+          const pendingCount=users.filter(u=>u.role==="youth"&&u.directorId===dir.id&&u.status==="pending").length;
+          return <div key={dir.id} style={{background:C.white,border:`1px solid ${C.border}`,borderRadius:16,
+            padding:"18px 20px",marginBottom:12,
+            boxShadow:idx===0?`0 4px 20px ${dir.color}22`:"0 1px 6px rgba(0,0,0,0.06)",
+            borderLeft:idx===0?`4px solid ${dir.color}`:`1px solid ${C.border}`}}>
+
+            <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:14}}>
+              <span style={{fontSize:22,width:28,textAlign:"center"}}>{medals[idx]||<span style={{fontFamily:"'Noto Serif SC',serif",color:C.muted,fontWeight:700,fontSize:14}}>{idx+1}</span>}</span>
+              <Avatar initials={dir.avatar} color={dir.color} size={44}/>
+              <div style={{flex:1}}>
+                <div style={{fontFamily:"'Noto Serif SC',serif",fontWeight:700,color:C.navy,fontSize:15}}>{dir.name}</div>
+                <div style={{fontFamily:"'Noto Serif SC',serif",color:C.muted,fontSize:12}}>{dir.zh}</div>
+              </div>
+              <div style={{textAlign:"right"}}>
+                <div style={{fontFamily:"'Noto Serif SC',serif",fontWeight:900,fontSize:30,color:dir.color,lineHeight:1}}>{s.total}</div>
+                <div style={{fontSize:10,color:C.muted,letterSpacing:1,textTransform:"uppercase"}}>pts</div>
+              </div>
+            </div>
+
+            <ScoreBar label="Onboarding" pts={s.onboardedPts} max={15} color={C.navy} detail={`${s.onboarded} youth × 1 pt = ${s.onboardedPts} pts`}/>
+            <ScoreBar label="Engagement" pts={s.engagementPts} max={30} color={C.green} detail={`${s.engagementPts} pts/month`}/>
+            <ScoreBar label="Youth Events" pts={s.eventPts} max={50} color={C.red} detail={`${s.approvedEvents} event${s.approvedEvents!==1?"s":""} × 10 = ${s.eventPts} pts`}/>
+
+            {/* Youth tier chips */}
+            <div style={{marginTop:10,display:"flex",gap:6,flexWrap:"wrap"}}>
+              {myYouth.map(y=>{
+                const t=getTier(y.lastActive);
+                return <div key={y.id} style={{background:tierColor(t)+"14",border:`1px solid ${tierColor(t)}30`,
+                  borderRadius:20,padding:"3px 10px",fontSize:10,color:tierColor(t),fontFamily:"Georgia,serif"}}>
+                  {y.name} · T{t}
+                </div>;
+              })}
+              {pendingCount>0&&<div style={{background:"#fff8e1",border:"1px solid #b8960c",borderRadius:20,padding:"3px 10px",fontSize:10,color:"#7a6200"}}>+{pendingCount} pending</div>}
+            </div>
+          </div>;
+        })}
+      </>}
+
+      {/* ── APPROVALS ── */}
+      {tab==="approvals" && <>
+        <div style={{marginBottom:28}}>
+          <SectionHead title="Youth Onboarding Requests" count={pendingYouth.length} color={C.navy}/>
+          {pendingYouth.length===0
+            ? <div style={{textAlign:"center",padding:"28px 0",color:C.muted,fontSize:13}}>No pending youth ✓</div>
+            : pendingYouth.map(y=>{
+              const dir=directors.find(d=>d.id===y.directorId);
+              return <div key={y.id} style={{background:C.white,border:`1px solid ${C.border}`,
+                borderLeft:`4px solid ${C.navy}`,borderRadius:"0 12px 12px 0",
+                padding:"13px 16px",marginBottom:10,display:"flex",alignItems:"center",gap:12}}>
+                <div style={{flex:1}}>
+                  <div style={{fontFamily:"'Noto Serif SC',serif",fontWeight:700,color:C.navy,fontSize:14}}>{y.name}</div>
+                  <div style={{fontSize:11,color:C.muted,marginTop:2}}>@{y.instagram} · +{y.whatsapp} · via <strong>{dir?.name}</strong></div>
+                </div>
+                <button onClick={()=>setRvYouth(y)} style={{background:C.navy,color:C.white,border:"none",borderRadius:8,padding:"8px 14px",fontFamily:"'Noto Serif SC',serif",fontWeight:700,fontSize:12,cursor:"pointer",flexShrink:0}}>Review →</button>
+              </div>;
+            })}
+        </div>
+
+        <div>
+          <SectionHead title="Event Approval Requests" count={pendingEvents.length} color={C.red}/>
+          {pendingEvents.length===0
+            ? <div style={{textAlign:"center",padding:"28px 0",color:C.muted,fontSize:13}}>No pending events ✓</div>
+            : pendingEvents.map(ev=>{
+              const dir=directors.find(d=>d.id===ev.directorId);
+              const tc=TYPE_COLORS[ev.type]||"#555";
+              const weeksUntil = Math.floor(daysBetween(today(), ev.date)/7);
+              const tooSoon = weeksUntil < 12;
+              return <div key={ev.id} style={{background:C.white,border:`1px solid ${C.border}`,
+                borderLeft:`4px solid ${C.red}`,borderRadius:"0 12px 12px 0",padding:"13px 16px",marginBottom:10}}>
+                <div style={{display:"flex",alignItems:"flex-start",gap:10}}>
+                  <div style={{flex:1}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:4}}>
+                      <div style={{fontFamily:"'Noto Serif SC',serif",fontWeight:700,color:C.navy,fontSize:14}}>{ev.name}</div>
+                      <Badge label={ev.type} color={tc}/>
+                      {tooSoon&&<Badge label="⚠ <12 weeks" color={C.red}/>}
+                    </div>
+                    <div style={{fontSize:11,color:C.muted,display:"flex",gap:10,flexWrap:"wrap"}}>
+                      <span>📅 {fmtDate(ev.date)}</span>
+                      <span>👥 ~{ev.estPax} pax</span>
+                      <span>📍 {ev.venue||"TBC"}</span>
+                      <span>🎓 {dir?.name}</span>
+                    </div>
+                  </div>
+                  <button onClick={()=>setRvEvent(ev)} style={{background:C.red,color:C.white,border:"none",borderRadius:8,padding:"8px 14px",fontFamily:"'Noto Serif SC',serif",fontWeight:700,fontSize:12,cursor:"pointer",flexShrink:0}}>Review →</button>
+                </div>
+              </div>;
+            })}
+        </div>
+      </>}
+
+      {/* ── EVENTS ── */}
+      {tab==="events" && <>
+        <SectionHead title="All Events" count={events.length} color={C.red}/>
+        {[...events].sort((a,b)=>new Date(b.date)-new Date(a.date)).map(ev=>{
+          const dir=directors.find(d=>d.id===ev.directorId);
+          const sc={pending:C.gold,approved:C.green,rejected:C.red};
+          const isPast = new Date(ev.date) < new Date();
+          return <div key={ev.id} style={{background:C.white,border:`1px solid ${C.border}`,borderRadius:14,
+            padding:"16px 18px",marginBottom:12,borderTop:`3px solid ${sc[ev.status]||C.muted}`,opacity:ev.status==="rejected"?0.6:1}}>
+            <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:8,marginBottom:10}}>
+              <div style={{fontFamily:"'Noto Serif SC',serif",fontWeight:700,color:C.navy,fontSize:15}}>{ev.name}</div>
+              <Badge label={ev.status} color={sc[ev.status]||C.muted}/>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
+              {[
+                {label:"Type",value:<Badge label={ev.type} color={TYPE_COLORS[ev.type]||"#555"}/>},
+                {label:"Date",value:fmtDate(ev.date)},
+                {label:"Est. Pax",value:`${ev.estPax} pax`},
+                {label:"Venue",value:ev.venue||"TBC"},
+                {label:"Youth Organiser",value:ev.youthOrganiser||"—"},
+                {label:"Director",value:dir?.name||"—"},
+                {label:"Checked In",value:`${ev.attendees.length} / ${ev.estPax}`},
+                {label:"Submitted",value:fmtDate(ev.submittedDate)},
+              ].map((row,i)=><div key={i} style={{background:C.cream,borderRadius:8,padding:"8px 10px"}}>
+                <div style={{fontSize:10,color:C.muted,textTransform:"uppercase",letterSpacing:0.6,marginBottom:2}}>{row.label}</div>
+                <div style={{fontSize:12,fontFamily:"'Noto Serif SC',serif",fontWeight:600,color:C.navy}}>{row.value}</div>
+              </div>)}
+            </div>
+            {ev.status==="approved" && (
+              <button onClick={()=>setQrEvent(ev)} style={{background:C.navy,color:C.white,border:"none",borderRadius:8,
+                padding:"8px 16px",fontFamily:"'Noto Serif SC',serif",fontWeight:700,fontSize:12,cursor:"pointer"}}>
+                📷 Scan Attendance
+              </button>
+            )}
+          </div>;
+        })}
+      </>}
+
+      {/* ── MEMBERS ── */}
+      {tab==="members" && <>
+        <SectionHead title="All Youth Members" count={allYouth.filter(u=>u.status==="approved").length} color={C.navy}/>
+        {allYouth.filter(u=>u.status==="approved").map(y=>{
+          const t=getTier(y.lastActive);
+          const dir=directors.find(d=>d.id===y.directorId);
+          return <div key={y.id} style={{background:C.white,border:`1px solid ${C.border}`,borderRadius:12,
+            padding:"14px 16px",marginBottom:10,display:"flex",alignItems:"center",gap:12}}>
+            <div style={{width:36,height:36,borderRadius:"50%",background:tierColor(t)+"20",
+              border:`2px solid ${tierColor(t)}`,display:"flex",alignItems:"center",justifyContent:"center",
+              fontSize:14,fontWeight:700,color:tierColor(t),fontFamily:"'Noto Serif SC',serif",flexShrink:0}}>T{t}</div>
+            <div style={{flex:1}}>
+              <div style={{fontFamily:"'Noto Serif SC',serif",fontWeight:700,color:C.navy,fontSize:14}}>{y.name} <span style={{fontWeight:400,opacity:0.6,fontSize:12}}>{y.zh}</span></div>
+              <div style={{fontSize:11,color:C.muted,marginTop:2}}>
+                {dir?.name} · Last active: {fmtDate(y.lastActive)} · {tierLabel(t)}
+              </div>
+            </div>
+            <Badge label={`+${tierPts(t)} pts/mo`} color={tierColor(t)}/>
+          </div>;
+        })}
+      </>}
+    </div>
+
+    {/* Modals */}
+    {rvYouth && <YouthApprovalModal youth={rvYouth} users={users}
+      director={directors.find(d=>d.id===rvYouth.directorId)}
+      onClose={()=>setRvYouth(null)} onApprove={approveYouth} onReject={rejectYouth}/>}
+    {rvEvent && <EventApprovalModal event={rvEvent}
+      director={directors.find(d=>d.id===rvEvent.directorId)}
+      onClose={()=>setRvEvent(null)} onApprove={approveEvent} onReject={rejectEvent}/>}
+    {qrEvent && <QRScanner event={qrEvent} users={users} onScan={handleScan} onClose={()=>setQrEvent(null)}/>}
+  </div>;
+}
+
+// ─── DIRECTOR VIEW ────────────────────────────────────────────────────────────
+function DirectorView({ currentUser, users, setUsers, events, setEvents, onLogout }) {
+  const [tab, setTab]   = useState("my-youth");
+  const [modal, setModal] = useState(null);
+
+  const myYouth  = users.filter(u=>u.role==="youth"&&u.directorId===currentUser.id);
+  const myEvents = events.filter(e=>e.directorId===currentUser.id);
+  const s        = calcScore(currentUser.id, users, events);
+
+  const submitYouth = (data) => {
+    setUsers(p=>[...p,{id:"y"+Date.now(),role:"youth",...data,
+      directorId:currentUser.id,status:"pending",submittedDate:today(),lastActive:null,joinedDate:null}]);
+  };
+  const submitEvent = (data) => {
+    setEvents(p=>[...p,{id:"e"+Date.now(),...data,
+      directorId:currentUser.id,submittedById:currentUser.id,submittedByRole:"director",
+      status:"pending",submittedDate:today(),attendees:[]}]);
+  };
+
+  const TABS=[{id:"my-youth",label:"My Youth"},{id:"my-events",label:"My Events"},{id:"score",label:"My Score"}];
+
+  return <div style={{minHeight:"100vh",background:C.bg,fontFamily:"Georgia,serif"}}>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;700;900&display=swap" rel="stylesheet"/>
+
+    <div style={{background:currentUser.color||C.navy,padding:"0 16px",position:"sticky",top:0,zIndex:100,boxShadow:"0 2px 16px rgba(0,0,0,0.2)"}}>
+      <div style={{maxWidth:640,margin:"0 auto",padding:"13px 0",display:"flex",alignItems:"center",gap:12}}>
+        <Avatar initials={currentUser.avatar||"Dir"} color={C.white+"33"} size={38}/>
+        <div style={{flex:1}}>
+          <div style={{fontFamily:"'Noto Serif SC',serif",fontWeight:900,color:C.white,fontSize:14}}>{currentUser.name}</div>
+          <div style={{fontSize:10,color:"rgba(255,255,255,0.5)",letterSpacing:1,textTransform:"uppercase"}}>Director</div>
+        </div>
+        <div style={{textAlign:"right"}}>
+          <div style={{fontFamily:"'Noto Serif SC',serif",fontWeight:900,color:C.white,fontSize:24,lineHeight:1}}>{s.total}</div>
+          <div style={{fontSize:9,color:"rgba(255,255,255,0.5)",letterSpacing:1,textTransform:"uppercase"}}>pts</div>
+        </div>
+        <button onClick={onLogout} style={{background:"rgba(255,255,255,0.15)",border:"none",color:C.white,borderRadius:8,padding:"6px 12px",fontSize:11,cursor:"pointer",fontFamily:"Georgia,serif"}}>Out</button>
+      </div>
+    </div>
+
+    <div style={{background:C.white,borderBottom:`1px solid ${C.border}`,padding:"0 16px"}}>
+      <div style={{maxWidth:640,margin:"0 auto",display:"flex"}}>
+        {TABS.map(t=><button key={t.id} onClick={()=>setTab(t.id)} style={{
+          padding:"12px 14px",border:"none",background:"transparent",
+          color:tab===t.id?C.navy:C.muted,fontFamily:"'Noto Serif SC',serif",
+          fontWeight:tab===t.id?700:400,fontSize:12,cursor:"pointer",
+          borderBottom:tab===t.id?`2.5px solid ${C.navy}`:"2.5px solid transparent",
+        }}>{t.label}</button>)}
+      </div>
+    </div>
+
+    <div style={{maxWidth:640,margin:"0 auto",padding:"20px 16px 100px"}}>
+
+      {tab==="my-youth" && <>
+        <SectionHead title="My Youth Members" count={myYouth.filter(u=>u.status==="approved").length} color={C.navy}/>
+        {myYouth.length===0 && <div style={{textAlign:"center",padding:"40px 0",color:C.muted,fontSize:13}}>No youth submitted yet.</div>}
+        {myYouth.map(y=>{
+          const t=getTier(y.lastActive);
+          const statusColor={approved:C.green,pending:C.gold,rejected:C.red}[y.status]||C.muted;
+          return <div key={y.id} style={{background:C.white,border:`1px solid ${C.border}`,borderRadius:12,
+            padding:"14px 16px",marginBottom:10,display:"flex",alignItems:"center",gap:12}}>
+            <div style={{width:36,height:36,borderRadius:"50%",background:y.status==="approved"?tierColor(t)+"20":"#f5f5f5",
+              border:`2px solid ${y.status==="approved"?tierColor(t):"#ddd"}`,display:"flex",alignItems:"center",
+              justifyContent:"center",fontSize:12,fontWeight:700,color:y.status==="approved"?tierColor(t):"#aaa",
+              fontFamily:"'Noto Serif SC',serif",flexShrink:0}}>
+              {y.status==="approved"?`T${t}`:"?"}
+            </div>
+            <div style={{flex:1}}>
+              <div style={{fontFamily:"'Noto Serif SC',serif",fontWeight:700,color:C.navy,fontSize:14}}>{y.name}</div>
+              <div style={{fontSize:11,color:C.muted,marginTop:2}}>
+                {y.status==="approved" ? `Last active: ${fmtDate(y.lastActive)} · ${tierLabel(t)}` : `Status: ${y.status}`}
+              </div>
+            </div>
+            <Badge label={y.status} color={statusColor}/>
+          </div>;
+        })}
+      </>}
+
+      {tab==="my-events" && <>
+        <SectionHead title="My Events" count={myEvents.length} color={C.red}/>
+        {myEvents.length===0 && <div style={{textAlign:"center",padding:"40px 0",color:C.muted,fontSize:13}}>No events submitted.</div>}
+        {myEvents.map(ev=>{
+          const sc={pending:C.gold,approved:C.green,rejected:C.red};
+          return <div key={ev.id} style={{background:C.white,border:`1px solid ${C.border}`,borderRadius:12,
+            padding:"14px 16px",marginBottom:10,borderLeft:`4px solid ${sc[ev.status]||C.muted}`}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,marginBottom:6}}>
+              <div style={{fontFamily:"'Noto Serif SC',serif",fontWeight:700,color:C.navy,fontSize:14}}>{ev.name}</div>
+              <Badge label={ev.status} color={sc[ev.status]||C.muted}/>
+            </div>
+            <div style={{fontSize:11,color:C.muted,display:"flex",gap:10,flexWrap:"wrap"}}>
+              <span>📅 {fmtDate(ev.date)}</span>
+              <span>👥 ~{ev.estPax} pax</span>
+              <span>✅ {ev.attendees.length} checked in</span>
+            </div>
+          </div>;
+        })}
+      </>}
+
+      {tab==="score" && <>
+        <div style={{background:C.white,border:`1px solid ${C.border}`,borderRadius:16,padding:"20px",marginBottom:16}}>
+          <div style={{textAlign:"center",marginBottom:20}}>
+            <div style={{fontFamily:"'Noto Serif SC',serif",fontWeight:900,fontSize:52,color:currentUser.color||C.navy,lineHeight:1}}>{s.total}</div>
+            <div style={{fontSize:12,color:C.muted,letterSpacing:1,textTransform:"uppercase",marginTop:4}}>Total Points</div>
+          </div>
+          <ScoreBar label="Onboarding" pts={s.onboardedPts} max={15} color={C.navy} detail={`${s.onboarded} youth × 1 pt = ${s.onboardedPts} pts`}/>
+          <ScoreBar label="Engagement" pts={s.engagementPts} max={30} color={C.green} detail={`${s.engagementPts} pts this month`}/>
+          <ScoreBar label="Youth Events" pts={s.eventPts} max={50} color={C.red} detail={`${s.approvedEvents} events × 10 = ${s.eventPts} pts`}/>
+        </div>
+
+        {/* Tier breakdown */}
+        <SectionHead title="Youth Tier Breakdown" color={C.green}/>
+        {myYouth.filter(u=>u.status==="approved").map(y=>{
+          const t=getTier(y.lastActive);
+          return <div key={y.id} style={{background:C.white,border:`1px solid ${C.border}`,borderRadius:10,
+            padding:"12px 14px",marginBottom:8,display:"flex",alignItems:"center",gap:10}}>
+            <div style={{flex:1}}>
+              <div style={{fontFamily:"'Noto Serif SC',serif",fontWeight:600,color:C.navy,fontSize:13}}>{y.name}</div>
+              <div style={{fontSize:11,color:C.muted}}>Last active: {fmtDate(y.lastActive)}</div>
+            </div>
+            <div style={{textAlign:"right"}}>
+              <Badge label={tierLabel(t)} color={tierColor(t)}/>
+              <div style={{fontSize:11,color:tierColor(t),fontWeight:700,marginTop:4,fontFamily:"Georgia,serif"}}>+{tierPts(t)} pts/mo</div>
+            </div>
+          </div>;
+        })}
+      </>}
+    </div>
+
+    {/* FAB */}
+    <div style={{position:"fixed",bottom:0,left:0,right:0,background:"linear-gradient(0deg,rgba(240,244,251,0.98) 70%,transparent)",padding:"14px 16px 28px"}}>
+      <div style={{maxWidth:640,margin:"0 auto",display:"flex",gap:10}}>
+        <button onClick={()=>setModal("youth")} style={{flex:1,padding:"14px 0",borderRadius:14,border:"none",background:C.navy,color:C.white,cursor:"pointer",fontFamily:"'Noto Serif SC',serif",fontWeight:700,fontSize:13,boxShadow:`0 4px 16px ${C.navy}44`}}>+ Add Youth</button>
+        <button onClick={()=>setModal("event")} style={{flex:1,padding:"14px 0",borderRadius:14,border:"none",background:C.red,color:C.white,cursor:"pointer",fontFamily:"'Noto Serif SC',serif",fontWeight:700,fontSize:13,boxShadow:`0 4px 16px ${C.red}44`}}>+ Submit Event</button>
+      </div>
+    </div>
+
+    {modal==="youth" && <AddYouthModal directors={[currentUser]} preselected={currentUser.id} onClose={()=>setModal(null)} onSubmit={submitYouth}/>}
+    {modal==="event" && <SubmitEventModal directors={[currentUser]} preselected={currentUser.id} onClose={()=>setModal(null)} onSubmit={submitEvent}/>}
+  </div>;
+}
+
+// ─── YOUTH VIEW ───────────────────────────────────────────────────────────────
+function YouthView({ currentUser, users, setUsers, events, setEvents, onLogout }) {
+  const [modal, setModal] = useState(null);
+  const [tab, setTab]     = useState("home");
+
+  const myEvents  = events.filter(e=>e.submittedById===currentUser.id || e.attendees.includes(currentUser.id));
+  const allApproved = events.filter(e=>e.status==="approved");
+  const t         = getTier(currentUser.lastActive);
+  const director  = users.find(u=>u.id===currentUser.directorId);
+
+  const submitEvent = (data) => {
+    setEvents(p=>[...p,{id:"e"+Date.now(),...data,
+      directorId:currentUser.directorId,submittedById:currentUser.id,submittedByRole:"youth",
+      status:"pending",submittedDate:today(),attendees:[]}]);
+  };
+
+  const TABS=[{id:"home",label:"Home"},{id:"events",label:"Events"},{id:"my-events",label:"My Submissions"}];
+
+  return <div style={{minHeight:"100vh",background:C.bg,fontFamily:"Georgia,serif"}}>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;700;900&display=swap" rel="stylesheet"/>
+
+    <div style={{background:`linear-gradient(135deg,${C.navy},#2a5298)`,padding:"0 16px",position:"sticky",top:0,zIndex:100}}>
+      <div style={{maxWidth:640,margin:"0 auto",padding:"13px 0",display:"flex",alignItems:"center",gap:12}}>
+        <div style={{width:38,height:38,borderRadius:"50%",background:C.white,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0}}>❤️</div>
+        <div style={{flex:1}}>
+          <div style={{fontFamily:"'Noto Serif SC',serif",fontWeight:900,color:C.white,fontSize:14}}>{currentUser.name}</div>
+          <div style={{fontSize:10,color:"rgba(255,255,255,0.5)",letterSpacing:1,textTransform:"uppercase"}}>Youth Member</div>
+        </div>
+        <Badge label={tierLabel(t)} color={C.white}/>
+        <button onClick={onLogout} style={{background:"rgba(255,255,255,0.15)",border:"none",color:C.white,borderRadius:8,padding:"6px 12px",fontSize:11,cursor:"pointer",fontFamily:"Georgia,serif"}}>Out</button>
+      </div>
+    </div>
+
+    <div style={{background:C.white,borderBottom:`1px solid ${C.border}`,padding:"0 16px"}}>
+      <div style={{maxWidth:640,margin:"0 auto",display:"flex"}}>
+        {TABS.map(t=><button key={t.id} onClick={()=>setTab(t.id)} style={{
+          padding:"12px 14px",border:"none",background:"transparent",
+          color:tab===t.id?C.navy:C.muted,fontFamily:"'Noto Serif SC',serif",
+          fontWeight:tab===t.id?700:400,fontSize:12,cursor:"pointer",
+          borderBottom:tab===t.id?`2.5px solid ${C.navy}`:"2.5px solid transparent",
+        }}>{t.label}</button>)}
+      </div>
+    </div>
+
+    <div style={{maxWidth:640,margin:"0 auto",padding:"20px 16px 100px"}}>
+
+      {tab==="home" && <>
+        {/* Status card */}
+        <div style={{background:`linear-gradient(135deg,${C.navy},#2a5298)`,borderRadius:16,padding:"20px",marginBottom:16,color:C.white}}>
+          <div style={{fontSize:11,opacity:0.6,letterSpacing:1,textTransform:"uppercase",marginBottom:8}}>Your Membership Status</div>
+          <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:12}}>
+            <div style={{width:44,height:44,borderRadius:"50%",background:tierColor(t),
+              display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Noto Serif SC',serif",fontWeight:900,fontSize:18}}>T{t}</div>
+            <div>
+              <div style={{fontFamily:"'Noto Serif SC',serif",fontWeight:700,fontSize:16}}>{tierLabel(t)}</div>
+              <div style={{fontSize:11,opacity:0.6}}>Last active: {fmtDate(currentUser.lastActive)}</div>
+            </div>
+            <div style={{marginLeft:"auto",textAlign:"right"}}>
+              <div style={{fontFamily:"'Noto Serif SC',serif",fontWeight:900,fontSize:22,color:tierColor(t)}}>{tierPts(t)}</div>
+              <div style={{fontSize:9,opacity:0.6,textTransform:"uppercase",letterSpacing:1}}>pts/month</div>
+            </div>
+          </div>
+          <div style={{background:"rgba(255,255,255,0.1)",borderRadius:8,padding:"8px 12px",fontSize:12,opacity:0.8}}>
+            Director: {director?.name} · To stay Tier 1, attend an event within 30 days.
+          </div>
+        </div>
+
+        {/* Your QR */}
+        <div style={{background:C.white,border:`1px solid ${C.border}`,borderRadius:16,padding:"20px",marginBottom:16,textAlign:"center"}}>
+          <div style={{fontSize:11,color:C.muted,letterSpacing:1,textTransform:"uppercase",marginBottom:12}}>Your Membership QR</div>
+          <div style={{width:120,height:120,margin:"0 auto",background:C.cream,borderRadius:12,
+            display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
+            border:`2px dashed ${C.border}`,marginBottom:12}}>
+            <div style={{fontSize:36}}>🪪</div>
+            <div style={{fontSize:9,color:C.muted,fontFamily:"Georgia,serif",marginTop:4}}>{currentUser.id}</div>
+          </div>
+          <div style={{fontFamily:"'Noto Serif SC',serif",fontWeight:700,color:C.navy,fontSize:14}}>{currentUser.name}</div>
+          <div style={{fontSize:11,color:C.muted,marginTop:2}}>Show this at events for attendance check-in</div>
+        </div>
+      </>}
+
+      {tab==="events" && <>
+        <SectionHead title="Upcoming Approved Events" count={allApproved.filter(e=>new Date(e.date)>=new Date()).length} color={C.red}/>
+        {allApproved.filter(e=>new Date(e.date)>=new Date()).length===0 && (
+          <div style={{textAlign:"center",padding:"40px 0",color:C.muted,fontSize:13}}>No upcoming events.</div>
+        )}
+        {allApproved.filter(e=>new Date(e.date)>=new Date()).sort((a,b)=>new Date(a.date)-new Date(b.date)).map(ev=>{
+          const attended = ev.attendees.includes(currentUser.id);
+          return <div key={ev.id} style={{background:C.white,border:`1px solid ${C.border}`,borderRadius:12,
+            padding:"14px 16px",marginBottom:10,borderLeft:`4px solid ${attended?C.green:C.red}`}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,marginBottom:6}}>
+              <div style={{fontFamily:"'Noto Serif SC',serif",fontWeight:700,color:C.navy,fontSize:14}}>{ev.name}</div>
+              {attended && <Badge label="✓ Attended" color={C.green}/>}
+            </div>
+            <div style={{fontSize:11,color:C.muted,display:"flex",gap:10,flexWrap:"wrap"}}>
+              <span>📅 {fmtDate(ev.date)}</span>
+              <span>📍 {ev.venue||"TBC"}</span>
+              <span>👥 ~{ev.estPax} pax</span>
+            </div>
+            {ev.description && <div style={{fontSize:12,color:C.muted,marginTop:6,fontFamily:"Georgia,serif",lineHeight:1.5}}>{ev.description}</div>}
+          </div>;
+        })}
+      </>}
+
+      {tab==="my-events" && <>
+        <SectionHead title="My Event Submissions" count={events.filter(e=>e.submittedById===currentUser.id).length} color={C.red}/>
+        <div style={{background:"#fff8e1",border:"1px solid #b8960c44",borderRadius:10,padding:"10px 14px",marginBottom:16,fontSize:12,color:"#7a6200",fontFamily:"Georgia,serif"}}>
+          ⏰ Events must be submitted at least <strong>3 months (12 weeks)</strong> before the event date.
+        </div>
+        {events.filter(e=>e.submittedById===currentUser.id).length===0 && (
+          <div style={{textAlign:"center",padding:"40px 0",color:C.muted,fontSize:13}}>No submissions yet.</div>
+        )}
+        {events.filter(e=>e.submittedById===currentUser.id).map(ev=>{
+          const sc={pending:C.gold,approved:C.green,rejected:C.red};
+          return <div key={ev.id} style={{background:C.white,border:`1px solid ${C.border}`,borderRadius:12,
+            padding:"14px 16px",marginBottom:10,borderLeft:`4px solid ${sc[ev.status]||C.muted}`}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,marginBottom:6}}>
+              <div style={{fontFamily:"'Noto Serif SC',serif",fontWeight:700,color:C.navy,fontSize:14}}>{ev.name}</div>
+              <Badge label={ev.status} color={sc[ev.status]||C.muted}/>
+            </div>
+            <div style={{fontSize:11,color:C.muted,display:"flex",gap:10,flexWrap:"wrap"}}>
+              <span>📅 {fmtDate(ev.date)}</span><span>👥 ~{ev.estPax} pax</span>
+            </div>
+          </div>;
+        })}
+      </>}
+    </div>
+
+    <div style={{position:"fixed",bottom:0,left:0,right:0,background:"linear-gradient(0deg,rgba(240,244,251,0.98) 70%,transparent)",padding:"14px 16px 28px"}}>
+      <div style={{maxWidth:640,margin:"0 auto"}}>
+        <button onClick={()=>setModal("event")} style={{width:"100%",padding:"14px 0",borderRadius:14,border:"none",background:C.red,color:C.white,cursor:"pointer",fontFamily:"'Noto Serif SC',serif",fontWeight:700,fontSize:13,boxShadow:`0 4px 16px ${C.red}44`}}>+ Propose an Event</button>
+      </div>
+    </div>
+
+    {modal==="event" && <SubmitEventModal directors={users.filter(u=>u.role==="director")} preselected={currentUser.directorId} onClose={()=>setModal(null)} onSubmit={submitEvent} enforceLeadTime/>}
+  </div>;
+}
+
+// ─── Youth Approval Modal ─────────────────────────────────────────────────────
+function YouthApprovalModal({ youth, users, director, onClose, onApprove, onReject }) {
+  return <Modal onClose={onClose}>
+    <MTitle title="Review Youth Onboarding" sub="Open profiles → add to both groups → then approve."/>
+    <div style={{background:C.cream,border:`1px solid ${C.border}`,borderRadius:12,padding:16,marginBottom:16}}>
+      <div style={{fontFamily:"'Noto Serif SC',serif",fontWeight:700,fontSize:16,color:C.navy,marginBottom:4}}>{youth.name}</div>
+      <div style={{fontSize:12,color:C.muted}}>Submitted by: <strong>{director?.name}</strong></div>
+    </div>
+    <div style={{display:"flex",flexDirection:"column",gap:10,marginBottom:16}}>
+      <a href={`https://wa.me/${youth.whatsapp}`} target="_blank" rel="noreferrer" style={{display:"flex",alignItems:"center",gap:12,background:"#e8f5e9",border:"1.5px solid #2e7d32",borderRadius:12,padding:"13px 16px",textDecoration:"none"}}>
+        <span style={{fontSize:24}}>💬</span>
+        <div style={{flex:1}}>
+          <div style={{fontFamily:"'Noto Serif SC',serif",fontWeight:700,color:C.green,fontSize:14}}>Open WhatsApp</div>
+          <div style={{fontSize:11,color:C.muted}}>+{youth.whatsapp} · add to clan WhatsApp group</div>
+        </div>
+        <span style={{fontSize:16,color:C.green}}>↗</span>
+      </a>
+      <a href={`https://instagram.com/${youth.instagram}`} target="_blank" rel="noreferrer" style={{display:"flex",alignItems:"center",gap:12,background:"#fce4ec",border:"1.5px solid #c0292b",borderRadius:12,padding:"13px 16px",textDecoration:"none"}}>
+        <span style={{fontSize:24}}>📸</span>
+        <div style={{flex:1}}>
+          <div style={{fontFamily:"'Noto Serif SC',serif",fontWeight:700,color:C.red,fontSize:14}}>Open Instagram</div>
+          <div style={{fontSize:11,color:C.muted}}>@{youth.instagram} · follow & add to clan IG group</div>
+        </div>
+        <span style={{fontSize:16,color:C.red}}>↗</span>
+      </a>
+    </div>
+    <div style={{background:"#fff8e1",border:"1px solid #b8960c33",borderRadius:9,padding:"10px 14px",marginBottom:20,fontSize:12,color:"#7a6200",fontFamily:"Georgia,serif"}}>
+      ✓ Confirm youth has joined <strong>both</strong> WhatsApp and Instagram before approving.
+    </div>
+    <div style={{display:"flex",gap:10}}>
+      <Btn label="✕ Reject" color={C.red} outline onClick={()=>{onReject(youth.id);onClose();}}/>
+      <Btn label="✓ Approve · +1 pt" color={C.green} onClick={()=>{onApprove(youth.id);onClose();}}/>
+    </div>
+  </Modal>;
+}
+
+// ─── Event Approval Modal ─────────────────────────────────────────────────────
+function EventApprovalModal({ event, director, onClose, onApprove, onReject }) {
+  const weeksUntil = Math.floor(daysBetween(today(), event.date)/7);
+  const tooSoon    = weeksUntil < 12;
+  const tc         = TYPE_COLORS[event.type]||"#555";
+  return <Modal onClose={onClose}>
+    <MTitle title="Review Event Submission" sub="Verify all details before awarding +10 pts."/>
+    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9,marginBottom:14}}>
+      {[
+        {label:"Event Name",value:event.name,full:true},
+        {label:"Type",value:<Badge label={event.type} color={tc}/>},
+        {label:"Date",value:fmtDate(event.date)},
+        {label:"Weeks Away",value:<span style={{color:tooSoon?C.red:C.green,fontWeight:700}}>{weeksUntil} weeks {tooSoon?"⚠ too soon":""}</span>},
+        {label:"Est. Pax",value:`${event.estPax} pax`},
+        {label:"Venue",value:event.venue||"—"},
+        {label:"Youth Organiser",value:event.youthOrganiser||"—"},
+        {label:"Director / Mentor",value:director?.name||"—"},
+        {label:"Submitted By",value:event.submittedByRole||"—"},
+        {label:"Submitted On",value:fmtDate(event.submittedDate)},
+      ].map((row,i)=><div key={i} style={{gridColumn:row.full?"1 / -1":undefined,background:C.cream,borderRadius:9,padding:"9px 12px"}}>
+        <div style={{fontSize:10,color:C.muted,textTransform:"uppercase",letterSpacing:0.6,marginBottom:2}}>{row.label}</div>
+        <div style={{fontSize:13,color:C.navy,fontFamily:"'Noto Serif SC',serif",fontWeight:600}}>{row.value}</div>
+      </div>)}
+    </div>
+    {event.description && <div style={{background:C.cream,borderRadius:9,padding:"9px 12px",marginBottom:14}}>
+      <div style={{fontSize:10,color:C.muted,textTransform:"uppercase",letterSpacing:0.6,marginBottom:2}}>Description</div>
+      <div style={{fontSize:13,color:C.navy,fontFamily:"Georgia,serif",lineHeight:1.5}}>{event.description}</div>
+    </div>}
+    {tooSoon && <div style={{background:"#fff3e0",border:"1px solid #e65100",borderRadius:9,padding:"9px 12px",marginBottom:14,fontSize:12,color:"#bf360c",fontFamily:"Georgia,serif"}}>
+      ⚠ Event is less than 12 weeks away. Policy requires 3-month advance notice.
+    </div>}
+    {event.estPax < 15 && <div style={{background:"#ffebee",border:"1px solid #c0292b",borderRadius:9,padding:"9px 12px",marginBottom:14,fontSize:12,color:C.red,fontFamily:"Georgia,serif"}}>
+      ⚠ Est. attendance below required 15 pax minimum.
+    </div>}
+    <div style={{display:"flex",gap:10}}>
+      <Btn label="✕ Reject" color={C.red} outline onClick={()=>{onReject(event.id);onClose();}}/>
+      <Btn label="✓ Approve · +10 pts" color={C.green} onClick={()=>{onApprove(event.id);onClose();}}/>
+    </div>
+  </Modal>;
+}
+
+// ─── Add Youth Modal ──────────────────────────────────────────────────────────
+function AddYouthModal({ directors, preselected, onClose, onSubmit }) {
+  const [name,setName]=useState(""); const [ig,setIg]=useState(""); const [wa,setWa]=useState("");
+  const [dirId,setDirId]=useState(preselected||directors[0]?.id);
+  return <Modal onClose={onClose}>
+    <MTitle title="Submit Youth for Onboarding" sub="Admin will verify before approving. Director earns +1 pt on approval."/>
+    <Field label="Youth Full Name"><Input value={name} onChange={setName} placeholder="Full name"/></Field>
+    <Field label="Instagram Handle">
+      <div style={{position:"relative"}}>
+        <span style={{position:"absolute",left:13,top:"50%",transform:"translateY(-50%)",color:C.muted,fontSize:13}}>@</span>
+        <input value={ig} onChange={e=>setIg(e.target.value)} placeholder="username" style={{...inputStyle,paddingLeft:26}}/>
+      </div>
+    </Field>
+    <Field label="WhatsApp (with country code)"><Input value={wa} onChange={setWa} placeholder="6591234567"/></Field>
+    {directors.length > 1 && <Field label="Director">
+      <Sel value={dirId} onChange={v=>setDirId(v)} options={directors.map(d=>({value:d.id,label:`${d.name} · ${d.zh}`}))}/>
+    </Field>}
+    <div style={{display:"flex",gap:10,marginTop:16}}>
+      <Btn label="Cancel" color={C.navy} outline onClick={onClose}/>
+      <Btn label="Submit for Approval" color={C.navy} disabled={!name.trim()||!ig.trim()||!wa.trim()}
+        onClick={()=>{onSubmit({name,instagram:ig,whatsapp:wa,directorId:dirId});onClose();}}/>
+    </div>
+  </Modal>;
+}
+
+// ─── Submit Event Modal ───────────────────────────────────────────────────────
+const EVENT_TYPES=["Cultural","Social","Education","Sports","Community Service","Other"];
+
+function SubmitEventModal({ directors, preselected, onClose, onSubmit, enforceLeadTime }) {
+  const [name,setName]=useState(""); const [type,setType]=useState("Cultural");
+  const [date,setDate]=useState(""); const [pax,setPax]=useState("");
+  const [venue,setVenue]=useState(""); const [desc,setDesc]=useState("");
+  const [organiser,setOrganiser]=useState("");
+  const [dirId,setDirId]=useState(preselected||directors[0]?.id);
+
+  const weeksUntil = date ? Math.floor(daysBetween(today(),date)/7) : null;
+  const tooSoon    = enforceLeadTime && weeksUntil !== null && weeksUntil < 12;
+
+  return <Modal onClose={onClose}>
+    <MTitle title="Submit Event for Approval" sub="Admin approves · +10 pts to director on approval."/>
+    <Field label="Event Name"><Input value={name} onChange={setName} placeholder="e.g. Heritage Walk 2026"/></Field>
+    <div style={{display:"flex",gap:10}}>
+      <div style={{flex:1}}><Field label="Type"><Sel value={type} onChange={setType} options={EVENT_TYPES.map(t=>({value:t,label:t}))}/></Field></div>
+      <div style={{flex:1}}><Field label="Event Date"><Input type="date" value={date} onChange={setDate}/></Field></div>
+    </div>
+    {tooSoon && <div style={{background:"#ffebee",border:"1px solid #c0292b",borderRadius:9,padding:"9px 12px",marginBottom:13,fontSize:12,color:C.red,fontFamily:"Georgia,serif"}}>
+      ⚠ Date must be at least 12 weeks away ({weeksUntil} weeks selected).
+    </div>}
+    <div style={{display:"flex",gap:10}}>
+      <div style={{flex:1}}><Field label="Est. Pax"><Input type="number" value={pax} onChange={setPax} placeholder="Min 15"/></Field></div>
+      <div style={{flex:1}}><Field label="Venue"><Input value={venue} onChange={setVenue} placeholder="Location"/></Field></div>
+    </div>
+    <Field label="Youth Primary Organiser"><Input value={organiser} onChange={setOrganiser} placeholder="Youth's full name"/></Field>
+    {directors.length > 1 && <Field label="Director / Mentor">
+      <Sel value={dirId} onChange={v=>setDirId(v)} options={directors.map(d=>({value:d.id,label:`${d.name}`}))}/>
+    </Field>}
+    <Field label="Description">
+      <textarea value={desc} onChange={e=>setDesc(e.target.value)} rows={3} placeholder="Brief description..."
+        style={{...inputStyle,resize:"vertical"}}/>
+    </Field>
+    <div style={{display:"flex",gap:10,marginTop:8}}>
+      <Btn label="Cancel" color={C.navy} outline onClick={onClose}/>
+      <Btn label="Submit for Approval" color={C.red}
+        disabled={!name.trim()||!date||!pax||(enforceLeadTime&&tooSoon)}
+        onClick={()=>{onSubmit({name,type,date,estPax:Number(pax),venue,description:desc,youthOrganiser:organiser,directorId:dirId});onClose();}}/>
+    </div>
+  </Modal>;
+}
+
+// ─── Root ─────────────────────────────────────────────────────────────────────
+export default function App() {
+  const [users,  setUsers]  = useState(INIT_USERS);
+  const [events, setEvents] = useState(INIT_EVENTS);
+  const [currentUser, setCurrentUser] = useState(null);
+
+  const handleLogin  = (user) => setCurrentUser(user);
+  const handleLogout = () => setCurrentUser(null);
+
+  if (!currentUser) return <LoginScreen users={users} onLogin={handleLogin}/>;
+
+  const props = { currentUser, users, setUsers, events, setEvents, onLogout: handleLogout };
+
+  if (currentUser.role==="admin")    return <AdminView    {...props}/>;
+  if (currentUser.role==="director") return <DirectorView {...props}/>;
+  if (currentUser.role==="youth")    return <YouthView    {...props}/>;
+
+  return <div>Unknown role</div>;
+}
