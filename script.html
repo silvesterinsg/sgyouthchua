@@ -1,4 +1,48 @@
 <script>
+const ACTIVITIES_LIST = ["Sports & Fitness", "Music & Performing Arts", "Gaming & Esports", "Food & Cooking", "Travel & Outdoor Adventures", "Arts & Crafts", "Technology & Coding", "Social Media & Content Creation", "Reading & Writing", "Community Service & Volunteering", "Dancing", "Photography & Videography", "Business & Entrepreneurship", "Language Learning", "Cultural Heritage & History"];
+
+
+// ── Language ──────────────────────────────────────────────
+let LANG = 'en';
+const T = {
+  en: {
+    title: '新加坡济阳蔡氏公会', sub: 'YOUTH PROGRAMME',
+    nameLabel: 'Name', namePlaceholder: 'Your name (or leave blank)',
+    passLabel: 'Password', signIn: 'Sign In', signingIn: 'Signing in…',
+    admin: 'Admin', director: 'Director', youth: 'Youth',
+    leaderboard: 'Leaderboard', approvals: 'Approvals', events: 'Events', members: 'Members',
+    myYouth: 'My Youth', myEvents: 'My Events', myScore: 'My Score',
+    home: 'Home', mySubmissions: 'My Submissions',
+    addYouth: '+ Add Youth', submitEvent: '+ Submit Event', proposeEvent: '+ Propose Event',
+    signOut: 'Out', demoPasswords: 'Demo passwords',
+    activeYouth: 'Active Youth', eventsDone: 'Events Done', pending: 'Pending',
+  },
+  cn: {
+    title: '新加坡济阳蔡氏公会', sub: '青年计划',
+    nameLabel: '姓名', namePlaceholder: '您的姓名（可留空）',
+    passLabel: '密码', signIn: '登录', signingIn: '登录中…',
+    admin: '管理员', director: '主任', youth: '青年',
+    leaderboard: '排行榜', approvals: '审批', events: '活动', members: '会员',
+    myYouth: '我的青年', myEvents: '我的活动', myScore: '我的积分',
+    home: '主页', mySubmissions: '我的提交',
+    addYouth: '+ 添加青年', submitEvent: '+ 提交活动', proposeEvent: '+ 提议活动',
+    signOut: '退出', demoPasswords: '测试密码',
+    activeYouth: '活跃青年', eventsDone: '已完成活动', pending: '待审批',
+  }
+};
+function t(key) { return T[LANG][key] || T['en'][key] || key; }
+function toggleLang() {
+  LANG = LANG === 'en' ? 'cn' : 'en';
+  document.getElementById('langBtn').textContent = LANG === 'en' ? '中文' : 'EN';
+  // Re-render login labels
+  const lname = document.querySelector('label[for-lang="name"]');
+  const lpass = document.querySelector('label[for-lang="pass"]');
+  if (lname) lname.textContent = t('nameLabel');
+  if (lpass) lpass.textContent = t('passLabel');
+  document.getElementById('loginName').placeholder = t('namePlaceholder');
+  document.getElementById('loginSub').textContent = t('sub');
+  if (STATE.currentUser) renderApp();
+}
 // ── State ─────────────────────────────────────────────────
 let STATE = { currentUser: null, role: null, users: [], events: [], pendingYouth: [], attendance: [], loginRole: 'admin' };
 
@@ -25,8 +69,8 @@ function calcScore(dirId) {
 function call(action, payload, cb) {
   google.script.run
     .withSuccessHandler(cb)
-    .withFailureHandler(err => { alert('Error: ' + err.message); })
-    .handleRequest(action, payload || {});
+    .withFailureHandler(function(err){ alert('Error: ' + err.message); })
+    .dispatch(action, payload || {});
 }
 
 // ── Login ─────────────────────────────────────────────────
@@ -39,14 +83,17 @@ function setRole(role, btn) {
 function doLogin() {
   const name = el('loginName').value.trim();
   const pass = el('loginPass').value.trim();
-  if (!pass) return;
-  el('loginBtn').textContent = 'Signing in…';
-  call('login', { username: name, password: pass }, res => {
-    el('loginBtn').textContent = 'Sign In';
+  if (!pass) { el('loginError').textContent = 'Please enter your password.'; el('loginError').style.display='block'; return; }
+  const btn = el('loginBtn');
+  btn.textContent = 'Signing in…';
+  btn.disabled = true;
+  call('login', { username: name, password: pass, role: STATE.loginRole }, res => {
+    btn.textContent = 'Sign In';
+    btn.disabled = false;
     if (!res.success) { el('loginError').textContent = res.message; el('loginError').style.display = 'block'; return; }
     el('loginError').style.display = 'none';
     if (res.user.role !== STATE.loginRole) {
-      el('loginError').textContent = 'Role mismatch. Select correct role tab.';
+      el('loginError').textContent = 'Wrong role tab selected. Please select ' + res.user.role + '.';
       el('loginError').style.display = 'block'; return;
     }
     STATE.currentUser = res.user;
@@ -690,4 +737,160 @@ function scanAttendance(eventId, userId) {
     } else alert(res.message);
   });
 }
+
+
+
+// ── Override buildAddYouthModal ───────────────────────────
+function buildAddYouthModal() {
+  var dirs = STATE.users.filter(function(u){return u.role==='director';});
+  var presel = STATE.currentUser.role==='director' ? STATE.currentUser.id : (dirs[0]||{}).id;
+  var actOpts = ACTIVITIES_LIST.map(function(a){
+    return '<label class="act-label"><input type="checkbox" name="activity" value="'+a+'"> '+a+'</label>';
+  }).join('');
+  return '<div class="modal-title">Submit Youth for Onboarding</div>'+
+  '<div class="modal-sub">Admin will verify · Director earns +1 pt on approval</div>'+
+  '<div class="notice-box"><div class="notice-box-title">📢 Inform the youth first</div>'+
+  '<div class="notice-box-body">Someone will contact them to add to clan Instagram &amp; WhatsApp groups:<br><br>'+
+  '📸 Instagram: <strong>@sil.ed77</strong><br>💬 WhatsApp: <strong>+65 87612976</strong><br><br>'+
+  'Make sure they are expecting this contact before submitting.</div></div>'+
+  '<div class="field"><label>Youth Full Name</label><input id="mYouthName" placeholder="Full name"></div>'+
+  '<div class="field"><label>Email Address</label><input id="mYouthEmail" type="email" placeholder="youth@email.com"></div>'+
+  '<div class="two-col">'+
+    '<div class="field"><label>Date of Birth</label><input id="mYouthDOB" type="date"></div>'+
+    '<div class="field"><label>Instagram Handle</label><div style="position:relative">'+
+    '<span style="position:absolute;left:13px;top:50%;transform:translateY(-50%);opacity:.5">@</span>'+
+    '<input id="mYouthIG" placeholder="username" style="padding-left:26px"></div></div>'+
+  '</div>'+
+  '<div class="field"><label>WhatsApp (with country code)</label><input id="mYouthWA" placeholder="6591234567"></div>'+
+  '<div class="field"><label>Director</label>'+
+    '<select id="mYouthDir">'+dirs.map(function(d){return '<option value="'+d.id+'"'+(d.id===presel?' selected':'')+'>'+d.name+' · '+d.zh+'</option>';}).join('')+'</select>'+
+  '</div>'+
+  '<div class="field"><label>Activities of Interest <span style="opacity:.5">(select all that apply)</span></label>'+
+    '<div class="act-grid">'+actOpts+'</div></div>'+
+  '<div class="modal-btn-row" style="margin-top:16px">'+
+    '<button class="modal-btn outline" style="border-color:var(--navy);color:var(--navy)" onclick="closeModal()">Cancel</button>'+
+    '<button class="modal-btn" style="background:var(--navy);color:#fff" onclick="submitYouthFormFull()">Submit for Approval</button>'+
+  '</div>';
+}
+
+function submitYouthFormFull() {
+  var name  = el('mYouthName').value.trim();
+  var email = el('mYouthEmail').value.trim();
+  var dob   = el('mYouthDOB').value;
+  var ig    = el('mYouthIG').value.trim();
+  var wa    = el('mYouthWA').value.trim();
+  var dirId = el('mYouthDir').value;
+  var acts  = Array.from(document.querySelectorAll('input[name="activity"]:checked')).map(function(x){return x.value;});
+  if (!name||!email||!dob||!ig||!wa) return alert('Please fill all required fields.');
+  call('submitYouth',{name:name,email:email,dob:dob,instagram:ig,whatsapp:wa,directorId:dirId,activities:acts.join(',')},function(res){
+    if(res.success){closeModal();loadAllData();}else alert(res.message);
+  });
+}
+
+// ── Override buildSubmitEventModal ────────────────────────
+function buildSubmitEventModal() {
+  var dirs = STATE.users.filter(function(u){return u.role==='director';});
+  var presel = STATE.currentUser.role==='director' ? STATE.currentUser.id
+             : STATE.currentUser.role==='youth' ? STATE.currentUser.directorId
+             : (dirs[0]||{}).id;
+  var types = ['Cultural','Social','Education','Sports','Community Service','Other'];
+  return '<div class="modal-title">Submit Event for Approval</div>'+
+  '<div class="modal-sub">Admin approves · +10 pts to director · Max 4 events/month</div>'+
+  '<div class="notice-box"><div class="notice-box-title">📋 Event Conditions — must meet ALL</div>'+
+  '<div class="notice-box-body">'+
+    '✓ Min <strong>15 pax under age 50</strong> (pax above 50 welcome additionally)<br>'+
+    '✓ <strong>All participants</strong> must be Chua or mother is Chua<br>'+
+    '✓ Budget max <strong>$500</strong> — claim via director to secretary<br>'+
+    '✓ Submit at least <strong>12 weeks</strong> before event date<br>'+
+    '✓ Named witness director <strong>must attend</strong> the event<br>'+
+    '✓ Max <strong>4 events approved per month</strong>'+
+  '</div></div>'+
+  '<div class="field"><label>Event Name</label><input id="mEvName" placeholder="e.g. Heritage Walk 2026"></div>'+
+  '<div class="two-col">'+
+    '<div class="field"><label>Type</label><select id="mEvType">'+types.map(function(t){return '<option>'+t+'</option>';}).join('')+'</select></div>'+
+    '<div class="field"><label>Event Date</label><input id="mEvDate" type="date" onchange="chkEvDate()"></div>'+
+  '</div>'+
+  '<div class="two-col">'+
+    '<div class="field"><label>Start Time</label><input id="mEvStart" type="time" value="10:00"></div>'+
+    '<div class="field"><label>End Time</label><input id="mEvEnd" type="time" value="13:00"></div>'+
+  '</div>'+
+  '<div id="mEvDateWarn" style="display:none" class="modal-warn">⚠ Must be at least 12 weeks away.</div>'+
+  '<div class="two-col">'+
+    '<div class="field"><label>Pax under 50 (min 15)</label><input id="mEvPaxU" type="number" placeholder="15"></div>'+
+    '<div class="field"><label>Pax above 50</label><input id="mEvPaxO" type="number" value="0" placeholder="0"></div>'+
+  '</div>'+
+  '<div class="two-col">'+
+    '<div class="field"><label>Venue</label><input id="mEvVenue" placeholder="Location"></div>'+
+    '<div class="field"><label>Budget ($, max 500)</label><input id="mEvBudget" type="number" placeholder="0" max="500" oninput="chkBudget()"></div>'+
+  '</div>'+
+  '<div id="mEvBudgetWarn" style="display:none" class="modal-warn">⚠ Budget cannot exceed $500.</div>'+
+  '<div class="field"><label>Youth Primary Organiser</label><input id="mEvOrg" placeholder="Youth name"></div>'+
+  '<div class="field"><label>Witness Director (must attend event)</label>'+
+    '<select id="mEvWitness">'+dirs.map(function(d){return '<option value="'+d.id+'"'+(d.id===presel?' selected':'')+'>'+d.name+'</option>';}).join('')+'</select>'+
+  '</div>'+
+  '<div class="field"><label>Description</label><textarea id="mEvDesc" rows="3" placeholder="Brief description..."></textarea></div>'+
+  '<div class="modal-btn-row" style="margin-top:8px">'+
+    '<button class="modal-btn outline" style="border-color:var(--navy);color:var(--navy)" onclick="closeModal()">Cancel</button>'+
+    '<button class="modal-btn" style="background:var(--red);color:#fff" onclick="submitEventFormFull()">Submit for Approval</button>'+
+  '</div>';
+}
+
+window.chkEvDate = function(){
+  var d=el('mEvDate').value;
+  var w=d?Math.floor((new Date(d)-new Date())/604800000):99;
+  var warn=el('mEvDateWarn');
+  if(warn) warn.style.display=w<12?'block':'none';
+};
+window.chkBudget = function(){
+  var b=parseFloat((el('mEvBudget')||{}).value)||0;
+  var warn=el('mEvBudgetWarn');
+  if(warn) warn.style.display=b>500?'block':'none';
+};
+
+function submitEventFormFull() {
+  var name=el('mEvName').value.trim(), date=el('mEvDate').value;
+  var paxU=parseInt(el('mEvPaxU').value)||0, paxO=parseInt(el('mEvPaxO').value)||0;
+  var budget=parseFloat(el('mEvBudget').value)||0;
+  if(!name||!date) return alert('Please fill required fields.');
+  if(paxU<15) return alert('Need at least 15 participants under age 50.');
+  if(budget>500) return alert('Budget cannot exceed $500.');
+  var weeks=Math.floor((new Date(date)-new Date())/604800000);
+  if(weeks<12) return alert('Event must be submitted at least 12 weeks in advance.');
+  var u=STATE.currentUser;
+  call('submitEvent',{
+    name:name, type:el('mEvType').value, date:date,
+    startTime:el('mEvStart').value, endTime:el('mEvEnd').value,
+    estPaxUnder50:paxU, estPaxOver50:paxO, estPax:paxU+paxO,
+    budget:budget, venue:el('mEvVenue').value.trim(),
+    description:el('mEvDesc').value.trim(),
+    youthOrganiser:el('mEvOrg').value.trim(),
+    directorId:el('mEvWitness').value, witnessDirectorId:el('mEvWitness').value,
+    submittedById:u.id, submittedByRole:u.role
+  },function(res){
+    if(res.success){closeModal();loadAllData();}else alert(res.message);
+  });
+}
+
+// ── Activity stats ────────────────────────────────────────
+function renderActivityStats(container) {
+  var youth=STATE.users.filter(function(u){return u.role==='youth'&&u.status==='approved';});
+  var counts={};
+  youth.forEach(function(y){
+    (y.activities||'').split(',').filter(Boolean).forEach(function(a){
+      counts[a]=(counts[a]||0)+1;
+    });
+  });
+  var sorted=Object.entries(counts).sort(function(a,b){return b[1]-a[1];}).slice(0,10);
+  var max=sorted[0]?sorted[0][1]:1;
+  var colors=['#1a3a6b','#c0292b','#2e7d32','#b8960c','#7b1fa2','#e65100'];
+  var html='<div class="section-head" style="margin-top:20px"><div class="section-bar" style="background:var(--navy)"></div><div class="section-title">Top Activities Among Youth</div></div><div class="activity-chart">';
+  if(!sorted.length){html+='<div class="empty">No activity data yet.</div>';}
+  else sorted.forEach(function(item,i){
+    var pct=(item[1]/max)*100;
+    html+='<div class="chart-bar-row"><div class="chart-bar-label">'+item[0]+'</div><div class="chart-bar-outer"><div class="chart-bar-inner" style="width:'+pct+'%;background:'+colors[i%colors.length]+'"></div></div><div class="chart-bar-count">'+item[1]+'</div></div>';
+  });
+  html+='</div>';
+  container.innerHTML+=html;
+}
+
 </script>
